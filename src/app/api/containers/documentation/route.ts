@@ -1,9 +1,17 @@
 import { NextResponse } from 'next/server'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { hasAccess } from '@/lib/access-control'
 import { getApiUser } from '@/lib/auth/api-user'
 import { clearContainerDataCache, getContainerDocumentation } from '@/lib/containers/data'
 import { createAdminClient } from '@/lib/supabase/admin'
+
+function value(input: unknown) {
+  return typeof input === 'string' ? input.trim() : ''
+}
+
+function escapeHtml(input: string) {
+  return input.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[character]!)
+}
 
 export async function GET(request: Request) {
   const user = await getApiUser()
@@ -27,66 +35,61 @@ export async function POST(request: Request) {
 
   let createdEntryId = ''
   try {
-    const input = await request.json() as { containerId?: unknown; freightForwarder?: unknown }
-    const containerId = String(input.containerId ?? '').trim()
-    const freightForwarder = String(input.freightForwarder ?? '').trim()
-    if (!containerId) return NextResponse.json({ error: 'Choose a container first.' }, { status: 400 })
+    const input = await request.json() as Record<string, unknown>
+    const vendorIds = [...new Set(Array.isArray(input.vendorIds) ? input.vendorIds.map(value).filter(Boolean) : [])]
+    const warehouseId = value(input.warehouseId)
+    const overseasRepId = value(input.overseasRepId)
+    const loadingDate = value(input.loadingDate)
+    const shippingLine = value(input.shippingLine)
+    const destinationPort = value(input.destinationPort)
+    const freightForwarder = value(input.freightForwarder)
+
+    if (!vendorIds.length) return NextResponse.json({ error: 'Select at least one vendor.' }, { status: 400 })
+    if (!warehouseId) return NextResponse.json({ error: 'Select a warehouse.' }, { status: 400 })
+    if (!overseasRepId) return NextResponse.json({ error: 'Select an overseas representative.' }, { status: 400 })
+    if (!loadingDate) return NextResponse.json({ error: 'Choose a loading date.' }, { status: 400 })
 
     const db = createAdminClient()
-    const { data: selected, error: selectedError } = await db
-      .from('Container')
-      .select('id,containerName,shippedOn,shippingLine,portName,portOfDischarge,warehouseId')
-      .eq('id', containerId)
-      .maybeSingle()
-    if (selectedError) throw selectedError
-    if (!selected) return NextResponse.json({ error: 'The selected container no longer exists.' }, { status: 404 })
-
-    const containerNumber = String(selected.containerName ?? '').trim()
-    if (!containerNumber) return NextResponse.json({ error: 'The selected container has no container number.' }, { status: 400 })
-
-    const { data: existing, error: existingError } = await db
-      .from('ContainerDocEntry')
-      .select('id')
-      .eq('containerNumber', containerNumber)
-      .limit(1)
-      .maybeSingle()
-    if (existingError) throw existingError
-    if (existing) {
-      return NextResponse.json({ error: 'A documentation entry already exists for this container.', entryId: existing.id }, { status: 409 })
-    }
-
-    const { data: linkedContainers, error: linkedError } = await db
-      .from('Container')
-      .select('id,vendorId')
-      .eq('containerName', containerNumber)
-      .limit(100)
-    if (linkedError) throw linkedError
-    const vendorIds = [...new Set((linkedContainers ?? []).map((row) => String(row.vendorId ?? '').trim()).filter(Boolean))]
-    if (!vendorIds.length) {
-      return NextResponse.json({ error: 'This container has no linked vendor, so its documentation entry cannot be created yet.' }, { status: 400 })
+    const [vendorResult, warehouseResult, representativeResult] = await Promise.all([
+      db.from('Vendor').select('id,name').in('id', vendorIds),
+      db.from('Warehouse').select('id,name').eq('id', warehouseId).maybeSingle(),
+      db.from('User').select('id,name,email,role').eq('id', overseasRepId).maybeSingle(),
+    ])
+    if (vendorResult.error) throw vendorResult.error
+    if (warehouseResult.error) throw warehouseResult.error
+    if (representativeResult.error) throw representativeResult.error
+    if ((vendorResult.data ?? []).length !== vendorIds.length) return NextResponse.json({ error: 'One or more selected vendors no longer exist.' }, { status: 400 })
+    if (!warehouseResult.data) return NextResponse.json({ error: 'The selected warehouse no longer exists.' }, { status: 400 })
+    const representative = representativeResult.data
+    if (!representative || !['OVERSEAS', 'OVERSEAS_REP'].includes(String(representative.role))) {
+      return NextResponse.json({ error: 'Select a valid overseas representative.' }, { status: 400 })
     }
 
     const now = new Date().toISOString()
+    const photoToken = randomBytes(32).toString('base64url')
     createdEntryId = randomUUID()
     const { error: entryError } = await db.from('ContainerDocEntry').insert({
       id: createdEntryId,
-      containerNumber,
-      loadingDate: selected.shippedOn ?? null,
-      shippingLine: selected.shippingLine ?? null,
-      destinationPort: selected.portName ?? selected.portOfDischarge ?? null,
-      containerId,
+      containerNumber: null,
+      containerId: null,
+      loadingDate,
+      shippingLine: shippingLine || null,
+      destinationPort: destinationPort || null,
+      freightForwarder: freightForwarder || null,
+      warehouseId,
+      overseasRepId,
+      photoToken,
       createdById: user.id,
       createdAt: now,
       updatedAt: now,
-      freightForwarder: freightForwarder || null,
-      warehouseId: selected.warehouseId ?? null,
       isSubmitted: false,
+      submittedAt: null,
       arrivalNotice: false,
       isAutoCreated: false,
     })
     if (entryError) throw entryError
 
-    const { error: vendorsError } = await db.from('ContainerDocVendor').insert(vendorIds.map((vendorId) => ({
+    const vendorRows = vendorIds.map((vendorId) => ({
       id: randomUUID(),
       entryId: createdEntryId,
       vendorId,
@@ -94,25 +97,58 @@ export async function POST(request: Request) {
       createdAt: now,
       updatedAt: now,
       isfConfirmed: false,
-    })))
-    if (vendorsError) {
-      await db.from('ContainerDocEntry').delete().eq('id', createdEntryId)
-      createdEntryId = ''
-      throw vendorsError
-    }
+    }))
+    const { error: vendorsError } = await db.from('ContainerDocVendor').insert(vendorRows)
+    if (vendorsError) throw vendorsError
+
+    const vendorNames = (vendorResult.data ?? []).map((vendor) => String(vendor.name)).sort()
+    const configuredBaseUrl = value(process.env.APP_BASE_URL)
+    const origin = configuredBaseUrl || new URL(request.url).origin
+    const uploadUrl = `${origin.replace(/\/$/, '')}/containers/docs/${photoToken}`
+    const subject = `New container documentation needed — ${vendorNames.join(', ')} loading ${loadingDate}`
+    const body = [
+      `<p>Hello ${escapeHtml(String(representative.name || 'there'))},</p>`,
+      `<p>A new container documentation request has been created for <strong>${escapeHtml(vendorNames.join(', '))}</strong>.</p>`,
+      `<p>Loading date: <strong>${escapeHtml(loadingDate)}</strong><br>Warehouse: <strong>${escapeHtml(String(warehouseResult.data.name))}</strong></p>`,
+      '<p>Use the secure link below to enter the container number, upload the Commercial Invoice, Bill of Lading, Packing Slip, and ISF Form for each vendor, add freight information, and submit the request.</p>',
+      `<p><a href="${escapeHtml(uploadUrl)}">Open documentation request</a></p>`,
+    ].join('')
+    const { error: emailError } = await db.from('EmailQueue').insert({
+      id: randomUUID(),
+      to: representative.email,
+      toName: representative.name || null,
+      subject,
+      body,
+      type: 'overseas_doc_created',
+      relatedId: createdEntryId,
+      relatedType: 'ContainerDocEntry',
+      status: 'queued',
+      queuedAt: now,
+      sentAt: null,
+      discardedAt: null,
+      sentBy: null,
+    })
+    if (emailError) throw emailError
 
     await db.from('ContainerDocActivity').insert({
+      id: randomUUID(),
       entryId: createdEntryId,
       vendorDocId: null,
       action: 'ENTRY_CREATED',
       actor: user.email,
-      details: { containerNumber, vendorCount: vendorIds.length },
+      details: { vendorCount: vendorIds.length, warehouseId, overseasRepId, emailQueued: true },
       createdAt: now,
     })
     clearContainerDataCache()
-    return NextResponse.json({ entryId: createdEntryId }, { status: 201 })
+    return NextResponse.json({ entryId: createdEntryId, emailQueued: true }, { status: 201 })
   } catch (error) {
     console.error('Container documentation creation failed', error)
+    if (createdEntryId) {
+      const db = createAdminClient()
+      await db.from('EmailQueue').delete().eq('relatedId', createdEntryId)
+      await db.from('ContainerDocVendor').delete().eq('entryId', createdEntryId)
+      await db.from('ContainerDocEntry').delete().eq('id', createdEntryId)
+    }
     return NextResponse.json({ error: 'Unable to create the documentation entry.' }, { status: 500 })
   }
 }

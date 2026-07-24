@@ -69,7 +69,7 @@ export type ContainerDocumentationVendor = {
 export type ContainerDocumentationRow = {
   id: string
   containerId: string | null
-  containerNumber: string
+  containerNumber: string | null
   warehouse: string
   loadingDate: string | null
   shippingLine: string
@@ -80,6 +80,7 @@ export type ContainerDocumentationRow = {
   arrivalNoticeAt: string | null
   scUploadCompletedAt: string | null
   updatedAt: string | null
+  invitationStatus: string | null
   status: string
   documentCount: number
   photoCount: number
@@ -335,15 +336,16 @@ export async function getContainerDocumentation({ fresh = false }: { fresh?: boo
   if (!fresh && documentationCache && documentationCache.expiresAt > Date.now()) return documentationCache.value
 
   const db = createAdminClient()
-  const [entryResult, vendorResult, vendorNameResult, warehouseResult, documentResult, photoResult] = await Promise.all([
+  const [entryResult, vendorResult, vendorNameResult, warehouseResult, documentResult, photoResult, emailResult] = await Promise.all([
     db.from('ContainerDocEntry').select('id,containerNumber,containerId,warehouseId,loadingDate,shippingLine,destinationPort,freightForwarder,isSubmitted,submittedAt,arrivalNoticeAt,scUploadCompletedAt,updatedAt').order('updatedAt', { ascending: false }).limit(1000),
     db.from('ContainerDocVendor').select('id,entryId,vendorId,status,reviewedAt,customsClearedAt').limit(1000),
     db.from('Vendor').select('id,name').limit(1000),
     db.from('Warehouse').select('id,name').limit(1000),
     db.from('ContainerDocument').select('id,containerDocVendorId').limit(1000),
     db.from('ContainerDeparturePhoto').select('id,containerDocVendorId').limit(1000),
+    db.from('EmailQueue').select('id,relatedId,status,type,queuedAt').eq('relatedType', 'ContainerDocEntry').order('queuedAt', { ascending: false }).limit(2000),
   ])
-  for (const result of [entryResult, vendorResult, vendorNameResult, warehouseResult, documentResult, photoResult]) {
+  for (const result of [entryResult, vendorResult, vendorNameResult, warehouseResult, documentResult, photoResult, emailResult]) {
     if (result.error) throw result.error
   }
 
@@ -351,6 +353,13 @@ export async function getContainerDocumentation({ fresh = false }: { fresh?: boo
   const warehouseNames = new Map(((warehouseResult.data ?? []) as Row[]).map((warehouse) => [text(warehouse, ['id']), text(warehouse, ['name'], '—')]))
   const documentCounts = new Map<string, number>()
   const photoCounts = new Map<string, number>()
+  const invitationStatuses = new Map<string, string>()
+  for (const email of (emailResult.data ?? []) as Row[]) {
+    const entryId = text(email, ['relatedId'])
+    if (entryId && !invitationStatuses.has(entryId) && text(email, ['type']).includes('overseas_doc')) {
+      invitationStatuses.set(entryId, text(email, ['status']).toLowerCase())
+    }
+  }
   for (const document of (documentResult.data ?? []) as Row[]) {
     const vendorId = text(document, ['containerDocVendorId'])
     documentCounts.set(vendorId, (documentCounts.get(vendorId) ?? 0) + 1)
@@ -383,7 +392,7 @@ export async function getContainerDocumentation({ fresh = false }: { fresh?: boo
     return {
       id: text(entry, ['id']),
       containerId: dateValue(entry, ['containerId']),
-      containerNumber: text(entry, ['containerNumber'], 'Untitled container'),
+      containerNumber: dateValue(entry, ['containerNumber']),
       warehouse: warehouseNames.get(text(entry, ['warehouseId'])) ?? '—',
       loadingDate: dateValue(entry, ['loadingDate']),
       shippingLine: text(entry, ['shippingLine'], '—'),
@@ -394,6 +403,7 @@ export async function getContainerDocumentation({ fresh = false }: { fresh?: boo
       arrivalNoticeAt: dateValue(entry, ['arrivalNoticeAt']),
       scUploadCompletedAt: dateValue(entry, ['scUploadCompletedAt']),
       updatedAt: dateValue(entry, ['updatedAt']),
+      invitationStatus: invitationStatuses.get(text(entry, ['id'])) ?? null,
       status,
       documentCount: vendors.reduce((total, vendor) => total + vendor.documentCount, 0),
       photoCount: vendors.reduce((total, vendor) => total + vendor.photoCount, 0),
@@ -665,8 +675,29 @@ async function loadContainerDetailFromDatabase(containerNumber: string): Promise
   if (vendorError) throw vendorError
   if (inventoryError) throw inventoryError
   const vendorIds = ((documentVendors ?? []) as Row[]).map((vendor) => text(vendor, ['id'])).filter(Boolean)
-  const [documentsResult, photosResult] = vendorIds.length ? await Promise.all([db.from('ContainerDocument').select('*').in('containerDocVendorId', vendorIds), db.from('ContainerDeparturePhoto').select('*').in('containerDocVendorId', vendorIds)]) : [{ data: [], error: null }, { data: [], error: null }]
-  if (documentsResult.error || photosResult.error) throw documentsResult.error || photosResult.error
+  const sourceVendorIds = [...new Set(((documentVendors ?? []) as Row[]).map((vendor) => text(vendor, ['vendorId'])).filter(Boolean))]
+  const [documentsResult, photosResult, warehousePhotosResult, vendorNamesResult, costsResult] = await Promise.all([
+    vendorIds.length ? db.from('ContainerDocument').select('*').in('containerDocVendorId', vendorIds) : Promise.resolve({ data: [], error: null }),
+    vendorIds.length ? db.from('ContainerDeparturePhoto').select('*').in('containerDocVendorId', vendorIds) : Promise.resolve({ data: [], error: null }),
+    entryIds.length ? db.from('ContainerWarehousePhoto').select('*').in('entryId', entryIds).order('uploadedAt', { ascending: true }) : Promise.resolve({ data: [], error: null }),
+    sourceVendorIds.length ? db.from('Vendor').select('id,name').in('id', sourceVendorIds) : Promise.resolve({ data: [], error: null }),
+    vendorIds.length ? db.from('ContainerCost').select('*').in('containerDocVendorId', vendorIds) : Promise.resolve({ data: [], error: null }),
+  ])
+  if (documentsResult.error || photosResult.error || warehousePhotosResult.error || vendorNamesResult.error || costsResult.error) {
+    throw documentsResult.error || photosResult.error || warehousePhotosResult.error || vendorNamesResult.error || costsResult.error
+  }
+  const vendorNames = new Map(((vendorNamesResult.data ?? []) as Row[]).map((vendor) => [text(vendor, ['id']), text(vendor, ['name'], 'Unknown vendor')]))
+  const costsByVendor = new Map(((costsResult.data ?? []) as Row[]).map((cost) => [text(cost, ['containerDocVendorId']), cost]))
+  const sellercloudIdsByVendor = new Map<string, string[]>()
+  for (const row of rowsWithWarehouse) {
+    const vendorId = text(row, ['vendorId'])
+    const sellercloudId = text(row, ['sellercloudId'])
+    if (vendorId && sellercloudId) sellercloudIdsByVendor.set(vendorId, [...(sellercloudIdsByVendor.get(vendorId) ?? []), sellercloudId])
+  }
+  const enrichedDocumentVendors = ((documentVendors ?? []) as Row[]).map((vendor) => {
+    const vendorId = text(vendor, ['vendorId'])
+    return { ...vendor, vendorName: vendorNames.get(vendorId) ?? 'Unknown vendor', sellercloudIds: [...new Set(sellercloudIdsByVendor.get(vendorId) ?? [])], cost: costsByVendor.get(text(vendor, ['id'])) ?? null }
+  })
   const inventoryRows = (inventoryData ?? []) as Row[]
   const inventoryBySku = new Map<string, Row>()
   for (const inventory of inventoryRows) {
@@ -716,7 +747,7 @@ async function loadContainerDetailFromDatabase(containerNumber: string): Promise
     items: entryItems,
   })).sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }))
   const uniqueMilestones = [...new Map(((milestonesResult.data ?? []) as Row[]).map((milestone) => [`${text(milestone, ['milestone'])}|${text(milestone, ['location'])}|${text(milestone, ['date'])}`, milestone])).values()].sort((left, right) => text(left, ['date']).localeCompare(text(right, ['date'])))
-  const value = { ...mergeContainerRows(rowsWithWarehouse), raw: primary, items, scEntries, milestones: uniqueMilestones, tracking: { origin: text(primary, ['portOfLoading'], 'Origin port'), destination: text(primary, ['portOfDischarge', 'portName'], 'Destination port'), latitude: first(primary, ['currentLatitude']) === null ? null : numeric(primary, ['currentLatitude']), longitude: first(primary, ['currentLongitude']) === null ? null : numeric(primary, ['currentLongitude']), status: text(primary, ['shipsgoStatus', 'status'], 'PENDING'), eta: dateValue(primary, ['shipsgoEta', 'etaPort', 'estimatedArrivalDate']), vessel: text(primary, ['vesselName', 'vesselNumber']), carrier: text(primary, ['shippingLine']), transitDays: first(primary, ['transitTime']) === null ? null : numeric(primary, ['transitTime']) }, trucking: ((truckingResult.data ?? [])[0] as Row | undefined) ?? null, documentation: docEntries, documentVendors: (documentVendors ?? []) as Row[], documents: (documentsResult.data ?? []) as Row[], departurePhotos: (photosResult.data ?? []) as Row[], priorityRestock, inventorySyncedAt }
+  const value = { ...mergeContainerRows(rowsWithWarehouse), raw: primary, items, scEntries, milestones: uniqueMilestones, tracking: { origin: text(primary, ['portOfLoading'], 'Origin port'), destination: text(primary, ['portOfDischarge', 'portName'], 'Destination port'), latitude: first(primary, ['currentLatitude']) === null ? null : numeric(primary, ['currentLatitude']), longitude: first(primary, ['currentLongitude']) === null ? null : numeric(primary, ['currentLongitude']), status: text(primary, ['shipsgoStatus', 'status'], 'PENDING'), eta: dateValue(primary, ['shipsgoEta', 'etaPort', 'estimatedArrivalDate']), vessel: text(primary, ['vesselName', 'vesselNumber']), carrier: text(primary, ['shippingLine']), transitDays: first(primary, ['transitTime']) === null ? null : numeric(primary, ['transitTime']) }, trucking: ((truckingResult.data ?? [])[0] as Row | undefined) ?? null, documentation: docEntries, documentVendors: enrichedDocumentVendors, documents: (documentsResult.data ?? []) as Row[], departurePhotos: (photosResult.data ?? []) as Row[], warehousePhotos: (warehousePhotosResult.data ?? []) as Row[], priorityRestock, inventorySyncedAt }
   return value
 }
 

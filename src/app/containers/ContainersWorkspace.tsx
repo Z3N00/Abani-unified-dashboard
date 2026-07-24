@@ -13,12 +13,14 @@ type TimelineRecord = { id?: string; milestone?: string; location?: string; date
 type Tracking = { origin: string; destination: string; latitude: number | null; longitude: number | null; status: string; eta: string | null; vessel: string; carrier: string; transitDays: number | null }
 type PriorityRow = { sku: string; productName: string; status: 'Out of Stock' | 'Low Stock'; onHand: number; inTransit: number; incoming: number }
 type DocumentationVendor = { id: string; name: string; status: string; documentCount: number; photoCount: number; reviewedAt: string | null; customsClearedAt: string | null }
-type DocumentationRow = { id: string; containerId: string | null; containerNumber: string; warehouse: string; loadingDate: string | null; shippingLine: string; destinationPort: string; freightForwarder: string; isSubmitted: boolean; submittedAt: string | null; arrivalNoticeAt: string | null; scUploadCompletedAt: string | null; updatedAt: string | null; status: string; documentCount: number; photoCount: number; vendors: DocumentationVendor[] }
+type DocumentationRow = { id: string; containerId: string | null; containerNumber: string | null; warehouse: string; loadingDate: string | null; shippingLine: string; destinationPort: string; freightForwarder: string; isSubmitted: boolean; submittedAt: string | null; arrivalNoticeAt: string | null; scUploadCompletedAt: string | null; updatedAt: string | null; invitationStatus: string | null; status: string; documentCount: number; photoCount: number; vendors: DocumentationVendor[] }
+type DocumentationOption = { id: string; name: string }
+type RepresentativeOption = DocumentationOption & { email: string; role: string }
 type PaymentRow = { id: string; entryId: string; containerNumber: string; vendor: string; warehouse: string; totalCost: number; paymentTerms: string; paymentDueDate: string | null; isPaid: boolean; paidAt: string | null; paymentScreenshotName: string; updatedAt: string | null }
 type FreightRow = { id: string; entryId: string; containerNumber: string; freightCost: number; freightForwarder: string; updatedAt: string | null }
 type PaymentFilter = 'all' | 'unpaid' | 'overdue' | 'paid' | 'due-0-15' | 'due-16-30' | 'due-31-45' | 'due-45-plus'
-type Detail = Container & { raw: Record<string, unknown>; items: Record<string, unknown>[]; scEntries: ScEntry[]; milestones: TimelineRecord[]; tracking: Tracking; trucking: Record<string, unknown> | null; documentation: Record<string, unknown>[]; documentVendors: Record<string, unknown>[]; documents: Record<string, unknown>[]; departurePhotos: Record<string, unknown>[]; priorityRestock: PriorityRow[]; inventorySyncedAt: string | null }
-type Capabilities = { tracking: boolean; items: boolean; trucking: boolean; timeline: boolean; documentation: boolean; documentationWrite: boolean; payments: boolean; slack: boolean; pdf: boolean; sync: boolean }
+type Detail = Container & { raw: Record<string, unknown>; items: Record<string, unknown>[]; scEntries: ScEntry[]; milestones: TimelineRecord[]; tracking: Tracking; trucking: Record<string, unknown> | null; documentation: Record<string, unknown>[]; documentVendors: Record<string, unknown>[]; documents: Record<string, unknown>[]; departurePhotos: Record<string, unknown>[]; warehousePhotos: Record<string, unknown>[]; priorityRestock: PriorityRow[]; inventorySyncedAt: string | null }
+type Capabilities = { tracking: boolean; items: boolean; trucking: boolean; timeline: boolean; documentation: boolean; documentationWrite: boolean; documentationAdmin: boolean; payments: boolean; slack: boolean; pdf: boolean; sync: boolean }
 type InitialData = { containers: Container[]; archived: Container[]; documentation: DocumentationRow[]; payments: { costs: PaymentRow[]; freight: FreightRow[] } }
 
 const statusClass = (status: string) => status.toLowerCase().replaceAll(' ', '-')
@@ -285,7 +287,7 @@ export default function ContainersWorkspace({ capabilities, shipsGoEmbedToken, i
     {(view === 'active' || view === 'archived') && <section className="container-filters"><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search containers, Sellercloud IDs, ports, carriers..." /><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="ALL">All statuses</option>{statuses.map((value) => <option value={value} key={value}>{value}</option>)}</select><select value={warehouse} onChange={(event) => setWarehouse(event.target.value)}><option value="ALL">All warehouses</option>{warehouses.map((value) => <option value={value} key={value}>{value}</option>)}</select><select value={docsStatus} onChange={(event) => setDocsStatus(event.target.value)}><option value="ALL">All document statuses</option><option value="DOCS_PENDING">Docs pending</option><option value="DOCS_UPLOADED">Docs uploaded</option><option value="REVIEWED">Reviewed</option><option value="IN_SELLERCLOUD">In Sellercloud</option><option value="CUSTOMS_CLEARED">Customs cleared</option></select></section>}
     {error && <div className="container-error">{error}</div>}
     {(view === 'active' || view === 'archived') && <section className="containers-table-wrap">{loading ? <div className="containers-empty">Loading containers...</div> : visible.length === 0 ? <div className="containers-empty">No containers match the selected filters.</div> : <table className="containers-table"><thead><tr><th>Container</th><th>SC IDs</th><th>Warehouse</th><th>Status</th><th>Docs</th><th>ETA port</th><th>Days away</th><th>Shipped</th><th>Quantity</th><th>Receiving</th></tr></thead><tbody>{visible.map((container) => <tr key={container.id} onPointerEnter={() => scheduleDetailPrefetch(container.id)} onPointerLeave={cancelDetailPrefetch} onFocus={() => prefetchDetail(container.id)} onClick={() => openDetail(container.id)}><td><button className="container-number">{container.number}</button><small>{container.carrier || container.vessel || 'Shipment details'}</small></td><td><ScIdList ids={container.sellercloudIds} /></td><td>{container.warehouse}</td><td><span className={`container-status ${statusClass(container.status)}`}>{container.status}</span></td><td><DocsStatus value={container.docsStatus} /></td><td>{formatDate(container.etaPort)}</td><td><DaysAway eta={container.etaPort} status={container.status} today={today} /></td><td>{formatDate(container.shippedOn)}</td><td>{formatNumber(container.quantity)}</td><td><Receiving quantity={container.quantity} received={container.receivedQuantity} /></td></tr>)}</tbody></table>}</section>}
-    {view === 'documentation' && (tabLoading && !documentationLoaded ? <div className="containers-empty tab-loading-panel">Loading documentation…</div> : <DocumentationWorkspace rows={documentation} containers={[...containers, ...archived]} canCreate={capabilities.documentationWrite} onRefresh={() => loadDocumentation(true)} />)}
+    {view === 'documentation' && (tabLoading && !documentationLoaded ? <div className="containers-empty tab-loading-panel">Loading documentation…</div> : <DocumentationWorkspace rows={documentation} canCreate={capabilities.documentationWrite} onRefresh={() => loadDocumentation(true)} />)}
     {view === 'payments' && (tabLoading && !paymentsLoaded ? <div className="containers-empty tab-loading-panel">Loading payments…</div> : <PaymentsWorkspace data={payments} />)}
     {detailLoading && <div className="detail-overlay"><div className="detail-card loading-detail">Loading shipment details...</div></div>}
     {selected && <DetailModal detail={selected} capabilities={capabilities} shipsGoEmbedToken={shipsGoEmbedToken} close={() => setSelected(null)} />}
@@ -298,17 +300,21 @@ function Receiving({ quantity, received }: { quantity: number; received: number 
 function DaysAway({ eta, status, today }: { eta: string | null; status: string; today: number }) { if (!eta) return <>-</>; const days = Math.ceil((new Date(eta).getTime() - today) / 86_400_000); if (days < 0) return <span className="days-away arrived">{status === 'DELIVERED' ? 'Delivered' : 'Arrived'}</span>; return <span className={`days-away${days <= 3 ? ' urgent' : ''}`}>{days}d</span> }
 function DocsStatus({ value }: { value: string }) { const labels: Record<string, string> = { DOCS_PENDING: 'Docs pending', DOCS_UPLOADED: 'Docs uploaded', REVIEWED: 'Reviewed', IN_SELLERCLOUD: 'In Sellercloud', CUSTOMS_CLEARED: 'Customs cleared', PAID: 'Paid' }; const label = labels[value] ?? humanize(value); return <span className={`docs-status ${value.toLowerCase()}`} title={label}><i aria-hidden="true">{value === 'DOCS_PENDING' ? '!' : '✓'}</i>{label}</span> }
 
-function DocumentationWorkspace({ rows, containers, canCreate, onRefresh }: { rows: DocumentationRow[]; containers: Container[]; canCreate: boolean; onRefresh: () => Promise<void> }) {
+function DocumentationWorkspace({ rows, canCreate, onRefresh }: { rows: DocumentationRow[]; canCreate: boolean; onRefresh: () => Promise<void> }) {
   const router = useRouter()
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('ALL')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [creating, setCreating] = useState(false)
-  const statuses = useMemo(() => [...new Set(rows.map((row) => row.status))].sort(), [rows])
-  const visibleRows = useMemo(() => rows.filter((row) => {
+  const pendingRows = useMemo(
+    () => rows.filter((row) => !row.containerId && (row.invitationStatus === 'queued' || row.invitationStatus === 'sent')),
+    [rows],
+  )
+  const statuses = useMemo(() => [...new Set(pendingRows.map((row) => row.status))].sort(), [pendingRows])
+  const visibleRows = useMemo(() => pendingRows.filter((row) => {
     const searchable = [row.containerNumber, row.warehouse, row.shippingLine, row.destinationPort, row.freightForwarder, ...row.vendors.map((vendor) => vendor.name)].join(' ').toLowerCase()
     return (statusFilter === 'ALL' || row.status === statusFilter) && searchable.includes(query.toLowerCase())
-  }), [query, rows, statusFilter])
+  }), [pendingRows, query, statusFilter])
   const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((row) => selectedIds.has(row.id))
 
   function toggleRow(id: string) {
@@ -334,7 +340,7 @@ function DocumentationWorkspace({ rows, containers, canCreate, onRefresh }: { ro
       <div><p className="eyebrow">DOCUMENTATION</p><h2>Container documentation</h2><p>Submission, arrival notice, Sellercloud upload, documents, and departure photos.</p></div>
       <div className="documentation-toolbar">
         {canCreate && <button className="documentation-new-entry" type="button" onClick={() => setCreating(true)}>＋ New Entry</button>}
-        <strong>{formatNumber(rows.length)} entries</strong>
+        <strong>{formatNumber(pendingRows.length)} pending</strong>
       </div>
     </header>
     <div className="top-tab-filters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search containers, vendors, warehouses..." /><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="ALL">All document statuses</option>{statuses.map((value) => <option value={value} key={value}>{humanize(value)}</option>)}</select></div>
@@ -343,49 +349,65 @@ function DocumentationWorkspace({ rows, containers, canCreate, onRefresh }: { ro
       const age = daysSince(row.updatedAt)
       return <tr className="documentation-entry-row" key={row.id} tabIndex={0} onClick={() => router.push(href)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') router.push(href) }}>
         <td className="documentation-check" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selectedIds.has(row.id)} onChange={() => toggleRow(row.id)} aria-label={`Select ${row.containerNumber}`} /></td>
-        <td><Link className="documentation-entry-link" href={href}>{row.containerNumber}</Link><small>{row.shippingLine}</small></td>
+        <td>{row.containerId ? <Link className="documentation-entry-link" href={href}>{row.containerNumber}</Link> : <em>Pending</em>}<small>{row.shippingLine}</small></td>
         <td><div className="documentation-vendor-list">{row.vendors.length ? row.vendors.map((vendor) => <span key={vendor.id}><b>{vendor.name}</b><em>{humanize(vendor.status)}</em></span>) : '—'}</div></td>
         <td>{formatDate(row.loadingDate)}</td><td>{row.warehouse}</td>
-        <td><span className={`documentation-sc-link ${row.containerId ? 'linked' : ''}`}>{row.containerId ? 'Linked' : 'Not linked'}</span></td>
+        <td><span className={`documentation-sc-link ${row.containerId ? 'linked' : ''}`}>{row.containerId ? 'Linked' : 'Awaiting SC'}</span></td>
         <td><DocsStatus value={row.status} /></td>
         <td><span className={`documentation-action ${documentationAction(row.status).toLowerCase()}`}>{documentationAction(row.status)}</span></td>
         <td><strong className={`documentation-days${age !== null && age >= 7 ? ' aging' : ''}`}>{age === null ? '-' : `${age}d`}</strong></td>
       </tr>
     })}</tbody></table>}</div>
-    {creating && <NewDocumentationEntry containers={containers} existingRows={rows} close={() => setCreating(false)} onCreated={async (entryId) => { setCreating(false); await onRefresh(); router.push(`/containers/documentation/${encodeURIComponent(entryId)}`) }} />}
+    {creating && <NewDocumentationEntry close={() => setCreating(false)} onCreated={async () => { setCreating(false); await onRefresh() }} />}
   </section>
 }
 
-function NewDocumentationEntry({ containers, existingRows, close, onCreated }: { containers: Container[]; existingRows: DocumentationRow[]; close: () => void; onCreated: (entryId: string) => Promise<void> }) {
-  const existingNumbers = useMemo(() => new Set(existingRows.map((row) => row.containerNumber.toLowerCase())), [existingRows])
-  const options = useMemo(() => {
-    const byNumber = new Map<string, Container>()
-    for (const container of containers) {
-      if (!existingNumbers.has(container.number.toLowerCase()) && !byNumber.has(container.number)) byNumber.set(container.number, container)
-    }
-    return [...byNumber.values()].sort((left, right) => left.number.localeCompare(right.number))
-  }, [containers, existingNumbers])
-  const [containerId, setContainerId] = useState(options[0]?.id ?? '')
-  const [freightForwarder, setFreightForwarder] = useState('')
+function NewDocumentationEntry({ close, onCreated }: { close: () => void; onCreated: () => Promise<void> }) {
+  const [vendors, setVendors] = useState<DocumentationOption[]>([])
+  const [warehouses, setWarehouses] = useState<DocumentationOption[]>([])
+  const [representatives, setRepresentatives] = useState<RepresentativeOption[]>([])
+  const [vendorIds, setVendorIds] = useState<string[]>([])
+  const [form, setForm] = useState({ warehouseId: '', overseasRepId: '', loadingDate: '', shippingLine: '', destinationPort: '', freightForwarder: '' })
+  const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState('')
-  const selectedContainer = options.find((container) => container.id === containerId)
+
+  useEffect(() => {
+    let active = true
+    authenticatedFetch('/api/containers/documentation/options')
+      .then(async (response) => {
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.error || 'Unable to load form options.')
+        if (active) {
+          setVendors(data.vendors ?? [])
+          setWarehouses(data.warehouses ?? [])
+          setRepresentatives(data.representatives ?? [])
+        }
+      })
+      .catch((error) => { if (active) setMessage(error instanceof Error ? error.message : 'Unable to load form options.') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+
+  function toggleVendor(id: string) {
+    setVendorIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id])
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!containerId) { setMessage('Choose a container first.'); return }
+    if (!vendorIds.length) { setMessage('Select at least one vendor.'); return }
     setSubmitting(true)
     setMessage('')
     try {
       const response = await authenticatedFetch('/api/containers/documentation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ containerId, freightForwarder }),
+        body: JSON.stringify({ vendorIds, ...form }),
       })
       const contentType = response.headers.get('content-type') ?? ''
       const data = contentType.includes('application/json') ? await response.json() : { error: `Documentation creation returned an unexpected response (${response.status}).` }
       if (!response.ok) throw new Error(data.error || 'Unable to create the documentation entry.')
-      await onCreated(String(data.entryId))
+      await onCreated()
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to create the documentation entry.')
     } finally {
@@ -395,12 +417,20 @@ function NewDocumentationEntry({ containers, existingRows, close, onCreated }: {
 
   return <div className="documentation-create-overlay" role="dialog" aria-modal="true" aria-labelledby="new-documentation-title" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}>
     <form className="documentation-create-card" onSubmit={submit}>
-      <header><div><p className="eyebrow">DOCUMENTATION</p><h2 id="new-documentation-title">Create a new entry</h2><p>Container, warehouse, vendor, shipping line, and loading details will be linked from the existing shipment.</p></div><button type="button" onClick={close} aria-label="Close">×</button></header>
-      <label>Container<select value={containerId} onChange={(event) => setContainerId(event.target.value)} disabled={!options.length}>{options.length ? options.map((container) => <option key={container.id} value={container.id}>{container.number} · {container.warehouse}</option>) : <option value="">No containers available</option>}</select></label>
-      {selectedContainer && <div className="documentation-create-preview"><span><small>Warehouse</small><strong>{selectedContainer.warehouse}</strong></span><span><small>Loading date</small><strong>{formatDate(selectedContainer.shippedOn)}</strong></span><span><small>Shipping line</small><strong>{selectedContainer.carrier || '-'}</strong></span><span><small>Destination</small><strong>{selectedContainer.port || '-'}</strong></span></div>}
-      <label>Freight forwarder <small>Optional</small><input value={freightForwarder} onChange={(event) => setFreightForwarder(event.target.value)} placeholder="Enter freight forwarder" /></label>
+      <header><div><h2 id="new-documentation-title">New Documentation Entry</h2><p>The overseas representative will add the container number and upload the requested files from the emailed link.</p></div><button type="button" onClick={close} aria-label="Close">×</button></header>
+      {loading ? <p>Loading vendors and staff…</p> : <>
+        <fieldset className="documentation-vendor-picker"><legend>Vendors <b>*</b></legend><div>{vendors.map((vendor) => <label key={vendor.id}><input type="checkbox" checked={vendorIds.includes(vendor.id)} onChange={() => toggleVendor(vendor.id)} />{vendor.name}</label>)}</div></fieldset>
+        <label><span>Warehouse <b>*</b></span><select required value={form.warehouseId} onChange={(event) => setForm({ ...form, warehouseId: event.target.value })}><option value="">Select warehouse…</option>{warehouses.map((warehouse) => <option value={warehouse.id} key={warehouse.id}>{warehouse.name}</option>)}</select></label>
+        <label><span>Overseas Representative <b>*</b></span><select required value={form.overseasRepId} onChange={(event) => setForm({ ...form, overseasRepId: event.target.value })}><option value="">Select overseas rep…</option>{representatives.map((representative) => <option value={representative.id} key={representative.id}>{representative.name} · {representative.email}</option>)}</select><small>This person will receive an invitation through the admin Email Queue.</small></label>
+        <label><span>Loading date <b>*</b></span><input required type="date" value={form.loadingDate} onChange={(event) => setForm({ ...form, loadingDate: event.target.value })} /></label>
+        <div className="documentation-create-grid">
+          <label>Shipping line <small>Optional</small><input value={form.shippingLine} onChange={(event) => setForm({ ...form, shippingLine: event.target.value })} /></label>
+          <label>Destination port <small>Optional</small><input value={form.destinationPort} onChange={(event) => setForm({ ...form, destinationPort: event.target.value })} /></label>
+        </div>
+        <label>Freight forwarder <small>Optional</small><input value={form.freightForwarder} onChange={(event) => setForm({ ...form, freightForwarder: event.target.value })} /></label>
+      </>}
       {message && <p className="documentation-create-error">{message}</p>}
-      <footer><button type="button" onClick={close}>Cancel</button><button type="submit" disabled={submitting || !options.length}>{submitting ? 'Creating…' : 'Create entry'}</button></footer>
+      <footer><button type="button" onClick={close}>Cancel</button><button type="submit" disabled={submitting || loading}>{submitting ? 'Creating…' : 'Create entry & queue email'}</button></footer>
     </form>
   </div>
 }
@@ -458,7 +488,7 @@ function PaymentsWorkspace({ data }: { data: { costs: PaymentRow[]; freight: Fre
 function DetailModal({ detail, capabilities, shipsGoEmbedToken, close }: { detail: Detail; capabilities: Capabilities; shipsGoEmbedToken: string; close: () => void }) {
   const tabs = [{ key: 'overview', label: 'Overview', visible: true }, { key: 'items', label: `Items (${detail.items.length})`, visible: capabilities.items }, { key: 'trucking', label: 'Trucking', visible: capabilities.trucking }, { key: 'timeline', label: 'Timeline & map', visible: capabilities.timeline }, { key: 'documentation', label: 'Documentation', visible: capabilities.documentation }]
   const [tab, setTab] = useState('overview')
-  return <div className="detail-overlay" role="dialog" aria-modal="true"><section className="detail-card"><header className="detail-header"><div><p className="eyebrow">CONTAINER DETAIL</p><h2>{detail.number} <span className="sc-summary">SC: {detail.sellercloudIds.join(', ') || '-'}</span></h2><span className={`container-status ${statusClass(detail.status)}`}>{detail.status}</span></div><div className="detail-actions">{capabilities.slack && <button disabled>Send to Slack</button>}{capabilities.pdf && <button disabled>Export PDF</button>}<button className="modal-close" onClick={close} aria-label="Close container detail">x</button></div></header><nav className="detail-tabs">{tabs.filter((item) => item.visible).map((item) => <button className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)} key={item.key}>{item.label}</button>)}</nav><div className="detail-content">{tab === 'overview' && <Overview detail={detail} canSync={capabilities.sync} />}{tab === 'items' && <ScItems entries={detail.scEntries} />}{tab === 'trucking' && <Rows rows={detail.trucking ? [detail.trucking] : []} empty="No trucking details have been added for this container." />}{tab === 'timeline' && <TimelineAndMap detail={detail} shipsGoEmbedToken={shipsGoEmbedToken} />}{tab === 'documentation' && <Documentation detail={detail} canUpload={capabilities.documentationWrite} />}</div></section></div>
+  return <div className="detail-overlay" role="dialog" aria-modal="true"><section className="detail-card"><header className="detail-header"><div><p className="eyebrow">CONTAINER DETAIL</p><h2>{detail.number} <span className="sc-summary">SC: {detail.sellercloudIds.join(', ') || '-'}</span></h2><span className={`container-status ${statusClass(detail.status)}`}>{detail.status}</span></div><div className="detail-actions">{capabilities.slack && <button disabled>Send to Slack</button>}{capabilities.pdf && <button disabled>Export PDF</button>}<button className="modal-close" onClick={close} aria-label="Close container detail">x</button></div></header><nav className="detail-tabs">{tabs.filter((item) => item.visible).map((item) => <button className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)} key={item.key}>{item.label}</button>)}</nav><div className="detail-content">{tab === 'overview' && <Overview detail={detail} canSync={capabilities.sync} />}{tab === 'items' && <ScItems entries={detail.scEntries} />}{tab === 'trucking' && <Rows rows={detail.trucking ? [detail.trucking] : []} empty="No trucking details have been added for this container." />}{tab === 'timeline' && <TimelineAndMap detail={detail} shipsGoEmbedToken={shipsGoEmbedToken} />}{tab === 'documentation' && <Documentation detail={detail} canUpload={capabilities.documentationWrite} canAdminister={capabilities.documentationAdmin} />}</div></section></div>
 }
 
 function Overview({ detail, canSync }: { detail: Detail; canSync: boolean }) {
@@ -556,40 +586,135 @@ function MapSetup({ detail }: { detail: Detail }) { return <div className="map-s
 function ScItems({ entries }: { entries: ScEntry[] }) { const [open, setOpen] = useState<string | null>(null); if (!entries.length) return <div className="detail-empty">No Sellercloud item rows are linked to this container.</div>; return <div className="sc-entries">{entries.map((entry) => <article key={entry.id} className="sc-entry"><button className="sc-entry-head" onClick={() => setOpen(open === entry.id ? null : entry.id)}><span className="sc-chevron">{open === entry.id ? 'v' : '>'}</span><strong>SC #{entry.id}</strong><span className="sc-vendor">{entry.vendor}</span><span className="sc-entry-total">{entry.itemCount} items</span><span className="sc-entry-total">{formatNumber(entry.quantity)} qty</span></button>{open === entry.id && <ItemTable items={entry.items} />}</article>)}</div> }
 function ItemTable({ items }: { items: Record<string, unknown>[] }) { return <div className="sc-item-table"><table><thead><tr><th>SKU</th><th>Product</th><th>Size</th><th>Qty</th><th>Received</th></tr></thead><tbody>{items.map((item, index) => <tr key={String(item.id ?? index)}><td>{display(item.sku)}</td><td>{display(item.productName)}</td><td>{display(item.size)}</td><td>{display(item.quantity)}</td><td>{display(item.receivedQty)}</td></tr>)}</tbody></table></div> }
 
-function Documentation({ detail, canUpload }: { detail: Detail; canUpload: boolean }) {
+function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; canUpload: boolean; canAdminister: boolean }) {
+  const documentVendors = Array.isArray(detail.documentVendors) ? detail.documentVendors : []
+  const documentRows = Array.isArray(detail.documents) ? detail.documents : []
+  const departurePhotos = Array.isArray(detail.departurePhotos) ? detail.departurePhotos : []
+  const warehousePhotos = Array.isArray(detail.warehousePhotos) ? detail.warehousePhotos : []
   const documentsByVendor = new Map<string, Record<string, unknown>[]>()
   const photosByVendor = new Map<string, Record<string, unknown>[]>()
-  for (const document of detail.documents) { const id = display(document.containerDocVendorId); documentsByVendor.set(id, [...(documentsByVendor.get(id) ?? []), document]) }
-  for (const photo of detail.departurePhotos) { const id = display(photo.containerDocVendorId); photosByVendor.set(id, [...(photosByVendor.get(id) ?? []), photo]) }
-  if (!detail.documentVendors.length) return <div className="detail-empty">No documentation package has been created for this container yet.</div>
-  return <div className="documentation-library"><header><div><p className="eyebrow">DOCUMENT LIBRARY</p><h3>Shipment documents & photos</h3></div><span className={`docs-access${canUpload ? '' : ' view'}`}>{canUpload ? 'Upload enabled' : 'View only'}</span></header>{detail.documentVendors.map((vendor) => { const id = display(vendor.id); const documents = documentsByVendor.get(id) ?? []; const photos = photosByVendor.get(id) ?? []; return <article className="vendor-docs" key={id}><div className="vendor-docs-head"><div><h4>Vendor documentation</h4><p>Status: {display(vendor.status)}</p></div><span>{documents.length} documents · {photos.length} photos</span></div><div className="document-grid">{documents.map((document) => <DocumentCard key={display(document.id)} document={document} containerId={detail.id} />)}</div>{photos.length > 0 && <><h5>Departure photos</h5><div className="photo-grid">{photos.map((photo) => <PhotoCard key={display(photo.id)} photo={photo} containerId={detail.id} />)}</div></>}{canUpload && <DocumentUploader containerId={detail.id} vendorId={id} />}</article>})}</div>
+  for (const document of documentRows) { const id = display(document.containerDocVendorId); documentsByVendor.set(id, [...(documentsByVendor.get(id) ?? []), document]) }
+  for (const photo of departurePhotos) { const id = display(photo.containerDocVendorId); photosByVendor.set(id, [...(photosByVendor.get(id) ?? []), photo]) }
+  const initialVendorCost = documentVendors[0]?.cost && typeof documentVendors[0].cost === 'object' ? documentVendors[0].cost as Record<string, unknown> : null
+  const [activeVendorId, setActiveVendorId] = useState(() => display(documentVendors[0]?.id))
+  const [vendorUpdates, setVendorUpdates] = useState<Record<string, Record<string, unknown>>>({})
+  const [isfConfirmed, setIsfConfirmed] = useState(() => Boolean(documentVendors[0]?.isfConfirmed))
+  const [totalCost, setTotalCost] = useState(() => initialVendorCost ? String(initialVendorCost.totalCost ?? '') : '')
+  const [paymentTerms, setPaymentTerms] = useState(() => initialVendorCost ? String(initialVendorCost.paymentTerms ?? '') : '')
+  const [paymentDueDate, setPaymentDueDate] = useState(() => initialVendorCost?.paymentDueDate ? String(initialVendorCost.paymentDueDate).slice(0, 10) : '')
+  const [savingAction, setSavingAction] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [actionMessage, setActionMessage] = useState('')
+  if (!documentVendors.length) return <div className="detail-empty">No documentation package has been created for this container yet.</div>
+  const baseActiveVendor = documentVendors.find((vendor) => display(vendor.id) === activeVendorId) ?? documentVendors[0]
+  const activeVendor = { ...baseActiveVendor, ...(vendorUpdates[display(baseActiveVendor.id)] ?? {}) }
+  const vendorId = display(activeVendor.id)
+  const documents = documentsByVendor.get(vendorId) ?? []
+  const photos = photosByVendor.get(vendorId) ?? []
+  const status = display(activeVendor.status)
+  const packageReady = status !== 'DOCS_PENDING' || documents.length >= 4
+  const scIds = Array.isArray(activeVendor.sellercloudIds) ? activeVendor.sellercloudIds.map(String) : []
+  const savedCost = activeVendor.cost && typeof activeVendor.cost === 'object' ? activeVendor.cost as Record<string, unknown> : null
+
+  async function updatePackage(action: 'approve' | 'reject' | 'save-cost') {
+    setSavingAction(action)
+    setActionError('')
+    setActionMessage('')
+    try {
+      const reviewNotes = action === 'reject' ? window.prompt('Tell the overseas representative what needs to be corrected:', 'Documents require changes') : ''
+      if (action === 'reject' && reviewNotes === null) return
+      const response = await authenticatedFetch(`/api/containers/${encodeURIComponent(detail.id)}/documentation/${encodeURIComponent(vendorId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action === 'save-cost'
+          ? { action, totalCost, paymentTerms, paymentDueDate }
+          : { action, isfConfirmed, reviewNotes }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to update this documentation package.')
+      if (data.vendor) {
+        setVendorUpdates((current) => ({ ...current, [vendorId]: { ...(current[vendorId] ?? {}), ...data.vendor } }))
+        setIsfConfirmed(Boolean(data.vendor.isfConfirmed))
+        setActionMessage(action === 'approve' ? 'Documents approved.' : 'Documents rejected and returned for correction.')
+      }
+      if (data.cost) {
+        setVendorUpdates((current) => ({ ...current, [vendorId]: { ...(current[vendorId] ?? {}), cost: data.cost } }))
+        setActionMessage('Cost and payment terms saved.')
+      }
+    } catch (requestError) {
+      setActionError(requestError instanceof Error ? requestError.message : 'Unable to update this documentation package.')
+    } finally {
+      setSavingAction('')
+    }
+  }
+
+  function selectVendor(id: string) {
+    const vendor = documentVendors.find((row) => display(row.id) === id)
+    const merged = vendor ? { ...vendor, ...(vendorUpdates[id] ?? {}) } : null
+    const cost = merged?.cost && typeof merged.cost === 'object' ? merged.cost as Record<string, unknown> : null
+    setActiveVendorId(id)
+    setIsfConfirmed(Boolean(merged?.isfConfirmed))
+    setTotalCost(cost ? String(cost.totalCost ?? '') : '')
+    setPaymentTerms(cost ? String(cost.paymentTerms ?? '') : '')
+    setPaymentDueDate(cost?.paymentDueDate ? String(cost.paymentDueDate).slice(0, 10) : '')
+    setActionError('')
+    setActionMessage('')
+  }
+
+  return <div className="documentation-library linked-documentation">
+    <header><div><p className="eyebrow">DOCUMENT LIBRARY</p><h3>Shipment documents & photos</h3></div><span className={`docs-access${canUpload ? '' : ' view'}`}>{canUpload ? 'Document access' : 'View only'}</span></header>
+    <nav className="vendor-document-tabs" aria-label="Vendor documentation packages">
+      {documentVendors.map((vendor) => {
+        const id = display(vendor.id)
+        return <button type="button" className={id === vendorId ? 'active' : ''} onClick={() => selectVendor(id)} key={id}><span>{display(vendor.vendorName)}</span>{Array.isArray(vendor.sellercloudIds) && vendor.sellercloudIds.length > 0 && <small>SC {vendor.sellercloudIds.map(String).join(', ')}</small>}</button>
+      })}
+    </nav>
+    <article className="vendor-docs active-vendor-package">
+      <div className="vendor-docs-head"><div><h4>{display(activeVendor.vendorName)}</h4><p>{scIds.length ? `SellerCloud ${scIds.join(', ')}` : 'SellerCloud link pending'}</p></div><DocsStatus value={status} /></div>
+      <div className={`vendor-review-banner ${packageReady ? 'ready' : 'pending'}`}><span>{packageReady ? '✓' : '!'}</span>{packageReady ? 'All documents uploaded — ready for admin review' : `${documents.length} of 4 required documents uploaded`}</div>
+      <section className="vendor-document-section"><h5>Documents</h5>{documents.length ? <div className="vendor-document-rows">{documents.map((document) => <DocumentCard key={display(document.id)} document={document} containerId={detail.id} />)}</div> : <div className="vendor-package-empty">No documents uploaded for this vendor.</div>}</section>
+      <details className="documentation-photo-section" open={photos.length > 0}>
+        <summary><span>Departure Photos</span><strong>{photos.length}</strong></summary>
+        <div>{photos.length ? <div className="photo-grid">{photos.map((photo) => <PhotoCard key={display(photo.id)} photo={photo} containerId={detail.id} />)}</div> : <p>No departure photos uploaded.</p>}</div>
+      </details>
+      {canAdminister && <section className="documentation-admin-controls">
+        <div className="document-review-panel">
+          <h5>Review Documents</h5>
+          <label className="isf-confirmation"><input type="checkbox" checked={isfConfirmed} onChange={(event) => setIsfConfirmed(event.target.checked)} /><span><strong>ISF filing confirmed</strong><small>Confirm that ISF has been filed with customs for this vendor&apos;s shipment.</small></span></label>
+          <div className="review-actions"><button type="button" className="approve" disabled={savingAction !== '' || !isfConfirmed} onClick={() => void updatePackage('approve')}>{savingAction === 'approve' ? 'Approving...' : 'Approve'}</button><button type="button" className="reject" disabled={savingAction !== ''} onClick={() => void updatePackage('reject')}>{savingAction === 'reject' ? 'Rejecting...' : 'Reject'}</button></div>
+          {display(activeVendor.reviewedAt) !== '-' && <p className="review-history">Last reviewed {formatDate(display(activeVendor.reviewedAt))}{display(activeVendor.reviewNotes) !== '-' ? ` — ${display(activeVendor.reviewNotes)}` : ''}</p>}
+        </div>
+        <details className="cost-payment-panel" open={Boolean(savedCost)}>
+          <summary><span>Cost &amp; Payment</span><strong>{savedCost ? formatCurrency(Number(savedCost.totalCost) || 0) : 'Not added'}</strong></summary>
+          <div className="cost-payment-fields">
+            <label><span>Total Cost</span><input type="number" min="0" step="0.01" value={totalCost} onChange={(event) => setTotalCost(event.target.value)} placeholder="0.00" /></label>
+            <label><span>Payment Terms</span><select value={paymentTerms} onChange={(event) => setPaymentTerms(event.target.value)}><option value="">Select terms...</option><option value="NET_30">Net 30</option><option value="NET_60">Net 60</option><option value="NET_90">Net 90</option><option value="CASH">Cash</option></select></label>
+            <label><span>Payment Due Date</span><input type="date" value={paymentDueDate} onChange={(event) => setPaymentDueDate(event.target.value)} /></label>
+            <button type="button" disabled={savingAction !== '' || !totalCost || !paymentTerms || !paymentDueDate} onClick={() => void updatePackage('save-cost')}>{savingAction === 'save-cost' ? 'Saving...' : 'Save Cost'}</button>
+          </div>
+        </details>
+        {actionError && <p className="documentation-action-message error">{actionError}</p>}
+        {actionMessage && <p className="documentation-action-message success">{actionMessage}</p>}
+      </section>}
+    </article>
+    <details className="warehouse-arrival-section">
+      <summary><span><b>Warehouse Arrival Photos</b><small>Receiving evidence shared across all vendor packages</small></span><strong>{warehousePhotos.length}</strong></summary>
+      <div>{warehousePhotos.length ? <div className="photo-grid">{warehousePhotos.map((photo) => {
+        const fileId = display(photo.id)
+        const url = `/api/documentation/${encodeURIComponent(display(photo.entryId))}/files/${encodeURIComponent(fileId)}?kind=warehouse-photo`
+        return <a className="photo-card" href={url} target="_blank" rel="noreferrer" key={fileId}><img src={url} alt={display(photo.fileName)} /></a>
+      })}</div> : <p>No warehouse arrival photos have been uploaded.</p>}</div>
+    </details>
+  </div>
 }
-function DocumentCard({ document, containerId }: { document: Record<string, unknown>; containerId: string }) { return <a className="document-card" href={`/api/containers/${encodeURIComponent(containerId)}/files/${encodeURIComponent(display(document.id))}?kind=document`} target="_blank" rel="noreferrer"><span>PDF</span><div><strong>{display(document.fileName)}</strong><small>{humanize(display(document.type))}</small></div></a> }
+function DocumentCard({ document, containerId }: { document: Record<string, unknown>; containerId: string }) {
+  const url = `/api/containers/${encodeURIComponent(containerId)}/files/${encodeURIComponent(display(document.id))}?kind=document`
+  return <div className="document-card"><span>DOC</span><div><strong>{humanize(display(document.type))}</strong><small>{display(document.fileName)}</small></div><div className="document-card-actions"><a href={url} target="_blank" rel="noreferrer" aria-label={`View ${display(document.fileName)}`}>View</a><a href={`${url}&download=1`} aria-label={`Download ${display(document.fileName)}`}>Download</a></div></div>
+}
 function PhotoCard({ photo, containerId }: { photo: Record<string, unknown>; containerId: string }) {
   const fileUrl = `/api/containers/${encodeURIComponent(containerId)}/files/${encodeURIComponent(display(photo.id))}?kind=photo`
   const label = display(photo.caption) === '-' ? display(photo.fileName) : display(photo.caption)
   return <a className="photo-card" href={fileUrl} target="_blank" rel="noreferrer" aria-label={`Open photo: ${label}`}><img src={fileUrl} alt={label} /></a>
 }
 
-function DocumentUploader({ containerId, vendorId }: { containerId: string; vendorId: string }) {
-  const [file, setFile] = useState<File | null>(null)
-  const [kind, setKind] = useState<'document' | 'departure-photo'>('document')
-  const [documentType, setDocumentType] = useState('OTHER')
-  const [caption, setCaption] = useState('')
-  const [message, setMessage] = useState('')
-  const [uploading, setUploading] = useState(false)
-  async function upload() {
-    if (!file) { setMessage('Choose a PDF or image first.'); return }
-    setUploading(true); setMessage('')
-    const body = new FormData(); body.set('file', file); body.set('vendorId', vendorId); body.set('kind', kind); body.set('documentType', documentType); body.set('caption', caption)
-    try {
-      const response = await authenticatedFetch(`/api/containers/${encodeURIComponent(containerId)}/documents`, { method: 'POST', body })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error || 'Upload failed.')
-      setMessage('Uploaded. Refreshing the document library…')
-      window.setTimeout(() => window.location.reload(), 450)
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Upload failed.') } finally { setUploading(false) }
-  }
-  return <div className="document-uploader"><div><strong>Add to this vendor package</strong><p>PDF, JPEG, PNG, or WebP · 15 MB maximum</p></div><div className="upload-controls"><select value={kind} onChange={(event) => setKind(event.target.value as 'document' | 'departure-photo')}><option value="document">Document</option><option value="departure-photo">Departure photo</option></select>{kind === 'document' ? <select value={documentType} onChange={(event) => setDocumentType(event.target.value)}><option value="BILL_OF_LADING">Bill of lading</option><option value="COMMERCIAL_INVOICE">Commercial invoice</option><option value="PACKING_SLIP">Packing slip</option><option value="ISF_FORM">ISF form</option><option value="ARRIVAL_NOTICE">Arrival notice</option><option value="OTHER">Other</option></select> : <input value={caption} onChange={(event) => setCaption(event.target.value)} placeholder="Optional caption" />}</div><div className="upload-controls"><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><button type="button" onClick={upload} disabled={uploading}>{uploading ? 'Uploading…' : 'Upload file'}</button></div>{message && <p className="upload-message">{message}</p>}</div>
-}
 function Rows({ rows, empty }: { rows: Record<string, unknown>[]; empty: string }) { if (!rows.length) return <div className="detail-empty">{empty}</div>; const columns = Object.keys(rows[0]).filter((key) => !['id', 'containerId'].includes(key)).slice(0, 6); return <div className="detail-rows"><table><thead><tr>{columns.map((column) => <th key={column}>{humanize(column)}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={String(row.id ?? index)}>{columns.map((column) => <td key={column}>{display(row[column])}</td>)}</tr>)}</tbody></table></div> }

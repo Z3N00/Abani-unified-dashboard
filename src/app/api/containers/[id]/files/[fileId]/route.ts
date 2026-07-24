@@ -27,7 +27,9 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 
   try {
     const { id: containerNumber, fileId } = await context.params
-    const kind = new URL(request.url).searchParams.get('kind') === 'photo' ? 'photo' : 'document'
+    const url = new URL(request.url)
+    const kind = url.searchParams.get('kind') === 'photo' ? 'photo' : 'document'
+    const download = url.searchParams.get('download') === '1'
     const db = createAdminClient()
     const table = kind === 'photo' ? 'ContainerDeparturePhoto' : 'ContainerDocument'
     const { data, error } = await db.from(table).select('*').eq('id', fileId).maybeSingle()
@@ -37,7 +39,9 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 
     const fileUrl = String(file.fileUrl ?? '')
     if (/^https?:\/\//i.test(fileUrl)) return NextResponse.redirect(fileUrl)
-    const { data: signed, error: signedError } = await db.storage.from('container-documents').createSignedUrl(fileUrl, 60 * 10)
+    const { data: signed, error: signedError } = await db.storage
+      .from('container-documents')
+      .createSignedUrl(fileUrl, 60 * 10, download ? { download: String(file.fileName || 'document') } : undefined)
     if (signedError || !signed?.signedUrl) throw signedError ?? new Error('Could not create a download link.')
     return NextResponse.redirect(signed.signedUrl)
   } catch (error) {
