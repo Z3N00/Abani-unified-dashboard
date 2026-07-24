@@ -588,9 +588,12 @@ function ItemTable({ items }: { items: Record<string, unknown>[] }) { return <di
 
 function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; canUpload: boolean; canAdminister: boolean }) {
   const documentVendors = Array.isArray(detail.documentVendors) ? detail.documentVendors : []
-  const documentRows = Array.isArray(detail.documents) ? detail.documents : []
-  const departurePhotos = Array.isArray(detail.departurePhotos) ? detail.departurePhotos : []
-  const warehousePhotos = Array.isArray(detail.warehousePhotos) ? detail.warehousePhotos : []
+  const [uploadedDocuments, setUploadedDocuments] = useState<Record<string, unknown>[]>([])
+  const [uploadedDeparturePhotos, setUploadedDeparturePhotos] = useState<Record<string, unknown>[]>([])
+  const [removedDeparturePhotoIds, setRemovedDeparturePhotoIds] = useState<string[]>([])
+  const [currentWarehousePhotos, setCurrentWarehousePhotos] = useState<Record<string, unknown>[]>(() => Array.isArray(detail.warehousePhotos) ? detail.warehousePhotos : [])
+  const documentRows = [...(Array.isArray(detail.documents) ? detail.documents : []), ...uploadedDocuments]
+  const departurePhotos = [...(Array.isArray(detail.departurePhotos) ? detail.departurePhotos : []), ...uploadedDeparturePhotos].filter((photo) => !removedDeparturePhotoIds.includes(display(photo.id)))
   const documentsByVendor = new Map<string, Record<string, unknown>[]>()
   const photosByVendor = new Map<string, Record<string, unknown>[]>()
   for (const document of documentRows) { const id = display(document.containerDocVendorId); documentsByVendor.set(id, [...(documentsByVendor.get(id) ?? []), document]) }
@@ -672,10 +675,10 @@ function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; c
     <article className="vendor-docs active-vendor-package">
       <div className="vendor-docs-head"><div><h4>{display(activeVendor.vendorName)}</h4><p>{scIds.length ? `SellerCloud ${scIds.join(', ')}` : 'SellerCloud link pending'}</p></div><DocsStatus value={status} /></div>
       <div className={`vendor-review-banner ${packageReady ? 'ready' : 'pending'}`}><span>{packageReady ? '✓' : '!'}</span>{packageReady ? 'All documents uploaded — ready for admin review' : `${documents.length} of 4 required documents uploaded`}</div>
-      <section className="vendor-document-section"><h5>Documents</h5>{documents.length ? <div className="vendor-document-rows">{documents.map((document) => <DocumentCard key={display(document.id)} document={document} containerId={detail.id} />)}</div> : <div className="vendor-package-empty">No documents uploaded for this vendor.</div>}</section>
+      <section className="vendor-document-section"><div className="section-heading-row"><h5>Documents</h5>{canUpload && <VendorFileUpload containerId={detail.id} vendorId={vendorId} kind="document" onUploaded={(file) => setUploadedDocuments((current) => [...current, file])} />}</div>{documents.length ? <div className="vendor-document-rows">{documents.map((document) => <DocumentCard key={display(document.id)} document={document} containerId={detail.id} />)}</div> : <div className="vendor-package-empty">No documents uploaded for this vendor.</div>}</section>
       <details className="documentation-photo-section" open={photos.length > 0}>
         <summary><span>Departure Photos</span><strong>{photos.length}</strong></summary>
-        <div>{photos.length ? <div className="photo-grid">{photos.map((photo) => <PhotoCard key={display(photo.id)} photo={photo} containerId={detail.id} />)}</div> : <p>No departure photos uploaded.</p>}</div>
+        <div><div className="photo-upload-row">{canUpload && <VendorFileUpload containerId={detail.id} vendorId={vendorId} kind="departure-photo" onUploaded={(file) => setUploadedDeparturePhotos((current) => [...current, file])} />}</div>{photos.length ? <div className="photo-grid">{photos.map((photo) => <PhotoCard key={display(photo.id)} photo={photo} containerId={detail.id} canRemove={canUpload} onRemoved={(id) => setRemovedDeparturePhotoIds((current) => [...current, id])} />)}</div> : <p>No departure photos uploaded.</p>}</div>
       </details>
       {canAdminister && <section className="documentation-admin-controls">
         <div className="document-review-panel">
@@ -697,24 +700,144 @@ function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; c
         {actionMessage && <p className="documentation-action-message success">{actionMessage}</p>}
       </section>}
     </article>
-    <details className="warehouse-arrival-section">
-      <summary><span><b>Warehouse Arrival Photos</b><small>Receiving evidence shared across all vendor packages</small></span><strong>{warehousePhotos.length}</strong></summary>
-      <div>{warehousePhotos.length ? <div className="photo-grid">{warehousePhotos.map((photo) => {
-        const fileId = display(photo.id)
-        const url = `/api/documentation/${encodeURIComponent(display(photo.entryId))}/files/${encodeURIComponent(fileId)}?kind=warehouse-photo`
-        return <a className="photo-card" href={url} target="_blank" rel="noreferrer" key={fileId}><img src={url} alt={display(photo.fileName)} /></a>
-      })}</div> : <p>No warehouse arrival photos have been uploaded.</p>}</div>
-    </details>
+    <WarehouseArrivalPhotos containerId={detail.id} entryId={display(activeVendor.entryId)} photos={currentWarehousePhotos} canUpload={canUpload} onUploaded={(photo) => setCurrentWarehousePhotos((current) => [...current.filter((row) => display(row.type) !== display(photo.type)), photo])} onRemoved={(id) => setCurrentWarehousePhotos((current) => current.filter((photo) => display(photo.id) !== id))} />
   </div>
 }
+
+function VendorFileUpload({ containerId, vendorId, kind, onUploaded }: { containerId: string; vendorId: string; kind: 'document' | 'departure-photo'; onUploaded: (file: Record<string, unknown>) => void }) {
+  const [file, setFile] = useState<File | null>(null)
+  const [documentType, setDocumentType] = useState('COMMERCIAL_INVOICE')
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function upload() {
+    if (!file) return
+    setUploading(true)
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.set('file', file)
+      formData.set('vendorId', vendorId)
+      formData.set('kind', kind)
+      if (kind === 'document') formData.set('documentType', documentType)
+      const response = await authenticatedFetch(`/api/containers/${encodeURIComponent(containerId)}/documents`, { method: 'POST', body: formData })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to upload this file.')
+      onUploaded(data.file as Record<string, unknown>)
+      setFile(null)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to upload this file.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return <div className="inline-file-upload">
+    {kind === 'document' && <select aria-label="Document type" value={documentType} onChange={(event) => setDocumentType(event.target.value)}>
+      <option value="COMMERCIAL_INVOICE">Commercial Invoice</option>
+      <option value="BILL_OF_LADING">Bill of Lading</option>
+      <option value="PACKING_SLIP">Packing Slip</option>
+      <option value="ISF_FORM">ISF Form</option>
+      <option value="ARRIVAL_NOTICE">Arrival Notice</option>
+      <option value="OTHER">Other</option>
+    </select>}
+    <label className="file-picker"><input type="file" accept={kind === 'document' ? ".pdf,.xlsx,.xls,.jpg,.jpeg,.png,.webp" : "image/jpeg,image/png,image/webp"} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><span>{file ? file.name : kind === 'document' ? 'Choose document' : 'Choose photo'}</span></label>
+    <button type="button" disabled={!file || uploading} onClick={() => void upload()}>{uploading ? 'Uploading...' : 'Upload'}</button>
+    {error && <small className="upload-error">{error}</small>}
+  </div>
+}
+
+const WAREHOUSE_PHOTO_SLOTS = [
+  { type: 'SEAL', label: 'Seal' },
+  { type: 'OPENED', label: 'Opened' },
+  { type: 'EMPTY', label: 'Empty' },
+  { type: 'SIGNED_BOL', label: 'Signed BOL' },
+] as const
+
+function WarehouseArrivalPhotos({ containerId, entryId, photos, canUpload, onUploaded, onRemoved }: { containerId: string; entryId: string; photos: Record<string, unknown>[]; canUpload: boolean; onUploaded: (photo: Record<string, unknown>) => void; onRemoved: (id: string) => void }) {
+  const [uploadingType, setUploadingType] = useState('')
+  const [removingId, setRemovingId] = useState('')
+  const [error, setError] = useState('')
+  const photosByType = new Map(photos.map((photo) => [display(photo.type), photo]))
+
+  async function upload(photoType: string, file: File) {
+    setUploadingType(photoType)
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.set('file', file)
+      formData.set('entryId', entryId)
+      formData.set('photoType', photoType)
+      const response = await authenticatedFetch(`/api/containers/${encodeURIComponent(containerId)}/warehouse-photos`, { method: 'POST', body: formData })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to upload this warehouse photo.')
+      onUploaded(data.photo as Record<string, unknown>)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to upload this warehouse photo.')
+    } finally {
+      setUploadingType('')
+    }
+  }
+
+  async function remove(photoId: string) {
+    if (!window.confirm('Remove this warehouse arrival photo?')) return
+    setRemovingId(photoId)
+    setError('')
+    try {
+      const response = await authenticatedFetch(`/api/containers/${encodeURIComponent(containerId)}/warehouse-photos?photoId=${encodeURIComponent(photoId)}`, { method: 'DELETE' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to remove this warehouse photo.')
+      onRemoved(photoId)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to remove this warehouse photo.')
+    } finally {
+      setRemovingId('')
+    }
+  }
+
+  const completed = WAREHOUSE_PHOTO_SLOTS.filter((slot) => photosByType.has(slot.type)).length
+  return <details className="warehouse-arrival-section structured-arrival-photos" open>
+    <summary><span><b>Warehouse Arrival Photos</b><small>Receiving evidence shared across all vendor packages</small></span><strong>({completed}/4)</strong></summary>
+    <div className="warehouse-photo-slots">{WAREHOUSE_PHOTO_SLOTS.map((slot) => {
+      const photo = photosByType.get(slot.type)
+      const fileId = photo ? display(photo.id) : ''
+      const url = photo ? `/api/documentation/${encodeURIComponent(display(photo.entryId))}/files/${encodeURIComponent(fileId)}?kind=warehouse-photo` : ''
+      return <article className={`warehouse-photo-slot${photo ? ' uploaded' : ''}`} key={slot.type}>
+        <h5>{slot.label}</h5>
+        {photo ? <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={`${slot.label} warehouse arrival`} /><span>View photo</span></a> : <div className="empty-photo-slot"><span>▣</span><small>Not uploaded</small></div>}
+        {canUpload && entryId !== '-' && <div className="warehouse-photo-actions"><label className="replace-photo"><input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploadingType !== '' || removingId !== ''} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void upload(slot.type, selected); event.currentTarget.value = '' }} /><span>{uploadingType === slot.type ? 'Uploading...' : photo ? 'Replace' : 'Upload'}</span></label>{photo && <button type="button" disabled={uploadingType !== '' || removingId !== ''} onClick={() => void remove(fileId)}>{removingId === fileId ? 'Removing...' : 'Remove'}</button>}</div>}
+      </article>
+    })}</div>
+    {error && <p className="upload-error warehouse-upload-error">{error}</p>}
+  </details>
+}
+
 function DocumentCard({ document, containerId }: { document: Record<string, unknown>; containerId: string }) {
   const url = `/api/containers/${encodeURIComponent(containerId)}/files/${encodeURIComponent(display(document.id))}?kind=document`
   return <div className="document-card"><span>DOC</span><div><strong>{humanize(display(document.type))}</strong><small>{display(document.fileName)}</small></div><div className="document-card-actions"><a href={url} target="_blank" rel="noreferrer" aria-label={`View ${display(document.fileName)}`}>View</a><a href={`${url}&download=1`} aria-label={`Download ${display(document.fileName)}`}>Download</a></div></div>
 }
-function PhotoCard({ photo, containerId }: { photo: Record<string, unknown>; containerId: string }) {
+function PhotoCard({ photo, containerId, canRemove = false, onRemoved }: { photo: Record<string, unknown>; containerId: string; canRemove?: boolean; onRemoved?: (id: string) => void }) {
   const fileUrl = `/api/containers/${encodeURIComponent(containerId)}/files/${encodeURIComponent(display(photo.id))}?kind=photo`
   const label = display(photo.caption) === '-' ? display(photo.fileName) : display(photo.caption)
-  return <a className="photo-card" href={fileUrl} target="_blank" rel="noreferrer" aria-label={`Open photo: ${label}`}><img src={fileUrl} alt={label} /></a>
+  const [removing, setRemoving] = useState(false)
+  const [error, setError] = useState('')
+  async function remove() {
+    if (!window.confirm('Remove this departure photo?')) return
+    setRemoving(true)
+    setError('')
+    try {
+      const id = display(photo.id)
+      const response = await authenticatedFetch(`/api/containers/${encodeURIComponent(containerId)}/documents?kind=departure-photo&fileId=${encodeURIComponent(id)}`, { method: 'DELETE' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to remove this photo.')
+      onRemoved?.(id)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to remove this photo.')
+    } finally {
+      setRemoving(false)
+    }
+  }
+  return <div className="removable-photo-card"><a className="photo-card" href={fileUrl} target="_blank" rel="noreferrer" aria-label={`Open photo: ${label}`}><img src={fileUrl} alt={label} /></a>{canRemove && <button type="button" disabled={removing} onClick={() => void remove()}>{removing ? 'Removing...' : 'Remove'}</button>}{error && <small>{error}</small>}</div>
 }
 
 function Rows({ rows, empty }: { rows: Record<string, unknown>[]; empty: string }) { if (!rows.length) return <div className="detail-empty">{empty}</div>; const columns = Object.keys(rows[0]).filter((key) => !['id', 'containerId'].includes(key)).slice(0, 6); return <div className="detail-rows"><table><thead><tr>{columns.map((column) => <th key={column}>{humanize(column)}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={String(row.id ?? index)}>{columns.map((column) => <td key={column}>{display(row[column])}</td>)}</tr>)}</tbody></table></div> }
