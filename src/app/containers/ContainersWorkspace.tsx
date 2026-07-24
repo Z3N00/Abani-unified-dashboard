@@ -799,7 +799,7 @@ function WarehouseArrivalPhotos({ containerId, entryId, vendorId, photos, canUpl
 
   const completed = WAREHOUSE_PHOTO_SLOTS.filter((slot) => photosByType.has(slot.type)).length
   return <details className="warehouse-arrival-section structured-arrival-photos" open>
-    <summary><span><b>Warehouse Arrival Photos</b><small>Receiving evidence shared across all vendor packages</small></span><strong>({completed}/4)</strong></summary>
+    <summary><span><b>Warehouse Arrival Photos</b><small>Receiving evidence for this vendor package</small></span><strong>({completed}/4)</strong></summary>
     <div className="warehouse-photo-slots">{WAREHOUSE_PHOTO_SLOTS.map((slot) => {
       const photo = photosByType.get(slot.type)
       const fileId = photo ? display(photo.id) : ''

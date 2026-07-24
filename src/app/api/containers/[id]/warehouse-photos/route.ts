@@ -83,7 +83,12 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     const db = createAdminClient()
     const { data: photo, error: photoError } = await db.from('ContainerWarehousePhoto').select('id,entryId,containerDocVendorId,type,fileUrl').eq('id', photoId).maybeSingle()
     if (photoError) throw photoError
-    if (!photo) return NextResponse.json({ error: 'Warehouse photo not found.' }, { status: 404 })
+    if (!photo) {
+      // Treat repeated removal as success so a stale Vercel/client cache can
+      // discard a card whose database row and storage object are already gone.
+      clearContainerDataCache()
+      return NextResponse.json({ removed: [photoId], alreadyRemoved: true })
+    }
     const { data: entry, error: entryError } = await db.from('ContainerDocEntry').select('containerId').eq('id', photo.entryId).maybeSingle()
     if (entryError) throw entryError
     const { data: container, error: containerError } = entry?.containerId
