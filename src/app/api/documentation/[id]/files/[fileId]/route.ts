@@ -7,13 +7,19 @@ type Row = Record<string, unknown>
 
 export async function GET(request: Request, context: { params: Promise<{ id: string; fileId: string }> }) {
   const user = await getApiUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  if (!hasAccess(user, 'containers.documentation')) return NextResponse.json({ error: 'You do not have access to container documentation.' }, { status: 403 })
-
   try {
     const { id: entryId, fileId } = await context.params
-    const kind = new URL(request.url).searchParams.get('kind')
+    const search = new URL(request.url).searchParams
+    const kind = search.get('kind')
+    const token = search.get('token') ?? ''
     const db = createAdminClient()
+    if (user) {
+      if (!hasAccess(user, 'containers.documentation')) return NextResponse.json({ error: 'You do not have access to container documentation.' }, { status: 403 })
+    } else {
+      const { data: entry, error: entryError } = await db.from('ContainerDocEntry').select('id').eq('id', entryId).eq('photoToken', token).maybeSingle()
+      if (entryError) throw entryError
+      if (!entry) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
     let file: Row | null = null
 
     if (kind === 'warehouse-photo') {

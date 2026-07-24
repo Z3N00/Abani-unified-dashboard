@@ -19,6 +19,7 @@ export default async function DocumentationDetailPage({ params }: { params: Prom
         initialDetail={detail}
         canEdit={hasAccess(user, 'containers.documentation', 'write')}
         canUpload={hasAccess(user, 'containers.documentation_upload', 'write')}
+        canDelete={user.role === 'ADMIN'}
       />
     </main>
   </DashboardShell>

@@ -27,11 +27,12 @@ const formatCurrency = (value: number) => new Intl.NumberFormat('en-US', { style
 const formatSize = (value: number) => value >= 1_048_576 ? `${(value / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(value / 1024))} KB`
 const humanize = (value: string) => value.replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (character) => character.toUpperCase())
 
-export default function DocumentationDetail({ initialDetail, canEdit, canUpload }: { initialDetail: ContainerDocumentationDetail; canEdit: boolean; canUpload: boolean }) {
+export default function DocumentationDetail({ initialDetail, canEdit, canUpload, canDelete = false, external = false, token = initialDetail.uploadToken }: { initialDetail: ContainerDocumentationDetail; canEdit: boolean; canUpload: boolean; canDelete?: boolean; external?: boolean; token?: string }) {
   const router = useRouter()
   const [detail, setDetail] = useState(initialDetail)
   const [editing, setEditing] = useState(false)
   const [sending, setSending] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const currentStep = Math.max(0, STATUS_STEPS.indexOf(detail.status as (typeof STATUS_STEPS)[number]))
@@ -65,11 +66,28 @@ export default function DocumentationDetail({ initialDetail, canEdit, canUpload 
     }
   }
 
+  async function deleteEntry() {
+    if (!window.confirm('Delete this pending documentation request? This cannot be undone.')) return
+    setDeleting(true)
+    setMessage('')
+    setError('')
+    try {
+      const response = await authenticatedFetch(`/api/containers/documentation?id=${encodeURIComponent(detail.id)}`, { method: 'DELETE' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to delete the documentation request.')
+      router.push('/containers?tab=documentation')
+      router.refresh()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to delete the documentation request.')
+      setDeleting(false)
+    }
+  }
+
   return <>
-    <Link className="documentation-back" href="/containers?tab=documentation">← Back to containers</Link>
+    {!external && <Link className="documentation-back" href="/containers?tab=documentation">← Back to containers</Link>}
     <section className="documentation-summary-card">
-      <div className="documentation-title-line"><div><h1>{detail.containerNumber}</h1><span className={`workflow-status ${detail.status.toLowerCase()}`}>{STATUS_LABELS[detail.status] ?? humanize(detail.status)}</span></div><div className="documentation-actions">{canEdit && <button type="button" onClick={resendEmail} disabled={sending}>✉ {sending ? 'Queueing…' : 'Resend Email'}</button>}{canEdit && <button type="button" onClick={() => setEditing(true)}>✎ Edit</button>}</div></div>
-      <Link className="linked-container" href={`/containers?tab=active`}>⚓ {detail.containerNumber}</Link>
+      <div className="documentation-title-line"><div><h1>{detail.containerId ? detail.containerNumber : 'Container # Pending'}</h1><span className={`workflow-status ${detail.status.toLowerCase()}`}>{STATUS_LABELS[detail.status] ?? humanize(detail.status)}</span></div><div className="documentation-actions">{!external && canEdit && <button type="button" onClick={resendEmail} disabled={sending || deleting}>✉ {sending ? 'Queueing…' : 'Resend Email'}</button>}{!external && canDelete && !detail.containerId && <button className="delete-documentation" type="button" onClick={deleteEntry} disabled={deleting || sending}>{deleting ? 'Deleting…' : 'Delete'}</button>}{!external && canEdit && <button type="button" onClick={() => setEditing(true)} disabled={deleting}>✎ Edit</button>}</div></div>
+      {!external && detail.containerId && <Link className="linked-container" href="/containers?tab=active">⚓ {detail.containerNumber}</Link>}
       <div className="documentation-facts"><Fact label="Loading Date" value={formatDate(detail.loadingDate)} /><Fact label="Shipping Line" value={detail.shippingLine} /><Fact label="Destination" value={detail.destinationPort} /><Fact label="Warehouse" value={detail.warehouse} /></div>
       <p><span>Overseas Rep:</span> {detail.overseasRep}</p>
       <p><span>Freight Forwarder:</span> {detail.freightForwarder}</p>
@@ -85,12 +103,15 @@ export default function DocumentationDetail({ initialDetail, canEdit, canUpload 
 
     <div className="documentation-next">Next: {nextAction}</div>
 
+    {canUpload && token && !detail.isSubmitted && <DocumentationSubmission detail={detail} token={token} updated={setDetail} />}
+
     <section className="documentation-content-card">
-      <header><div><p className="eyebrow">DOCUMENT LIBRARY</p><h2>Shipment documents & photos</h2></div><div><strong>{totalDocuments}</strong> documents · <strong>{totalPhotos}</strong> photos{canUpload && <span className="upload-enabled">Upload enabled</span>}</div></header>
-      {detail.vendors.map((vendor) => <VendorPackage detail={detail} vendor={vendor} key={vendor.id} />)}
+      <header><div><p className="eyebrow">DOCUMENT LIBRARY</p><h2>Shipment documents & photos</h2></div><div><strong>{totalDocuments}</strong> documents · <strong>{totalPhotos}</strong> photos{canUpload && <span className={detail.containerId ? 'upload-enabled' : 'upload-locked'}>{detail.containerId ? 'Upload enabled' : 'Upload locked'}</span>}</div></header>
+      {canUpload && !detail.containerId && <div className="documentation-upload-locked"><strong>Link the container before uploading.</strong><span>Enter the SellerCloud container number above. Once it is linked, document and departure-photo upload controls will appear for each vendor.</span></div>}
+      {detail.vendors.map((vendor) => <VendorPackage detail={detail} vendor={vendor} canUpload={canUpload && !detail.isSubmitted && Boolean(detail.containerId)} token={token} updated={setDetail} key={vendor.id} />)}
     </section>
 
-    {detail.warehousePhotos.length > 0 && <section className="documentation-content-card"><header><div><p className="eyebrow">WAREHOUSE RECEIVING</p><h2>Warehouse photos</h2></div><strong>{detail.warehousePhotos.length} photos</strong></header><div className="documentation-photo-grid">{detail.warehousePhotos.map((photo) => <a href={`/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=warehouse-photo`} target="_blank" rel="noreferrer" key={photo.id}><img src={`/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=warehouse-photo`} alt={photo.fileName} /><span>{humanize(photo.type)}</span></a>)}</div></section>}
+    {detail.warehousePhotos.length > 0 && <section className="documentation-content-card"><header><div><p className="eyebrow">WAREHOUSE RECEIVING</p><h2>Warehouse photos</h2></div><strong>{detail.warehousePhotos.length} photos</strong></header><div className="documentation-photo-grid">{detail.warehousePhotos.map((photo) => { const url = `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=warehouse-photo&token=${encodeURIComponent(token)}`; return <a href={url} target="_blank" rel="noreferrer" key={photo.id}><img src={url} alt={photo.fileName} /><span>{humanize(photo.type)}</span></a> })}</div></section>}
 
     <section className="documentation-lower-grid">
       <article className="documentation-content-card compact"><h2>Freight & payment</h2><DetailLine label="Freight forwarder" value={detail.freight?.freightForwarder || detail.freightForwarder} /><DetailLine label="Freight cost" value={detail.freight ? formatCurrency(detail.freight.freightCost) : 'Not added'} />{detail.vendors.map((vendor) => <div className="vendor-payment" key={vendor.id}><strong>{vendor.name}</strong><DetailLine label="Vendor cost" value={vendor.cost ? formatCurrency(vendor.cost.totalCost) : 'Not added'} /><DetailLine label="Payment terms" value={vendor.cost ? humanize(vendor.cost.paymentTerms) : '—'} /><DetailLine label="Due date" value={vendor.cost ? formatDate(vendor.cost.paymentDueDate) : '—'} /><DetailLine label="Payment status" value={vendor.cost?.isPaid ? `Paid ${formatDate(vendor.cost.paidAt)}` : 'Unpaid'} /></div>)}</article>
@@ -101,14 +122,91 @@ export default function DocumentationDetail({ initialDetail, canEdit, canUpload 
   </>
 }
 
+function DocumentationSubmission({ detail, token, updated }: { detail: ContainerDocumentationDetail; token: string; updated: (detail: ContainerDocumentationDetail) => void }) {
+  const [containerNumber, setContainerNumber] = useState('')
+  const [freightCost, setFreightCost] = useState(detail.freight ? String(detail.freight.freightCost) : '')
+  const [freightForwarder, setFreightForwarder] = useState(detail.freight?.freightForwarder || (detail.freightForwarder === '—' ? '' : detail.freightForwarder))
+  const [working, setWorking] = useState('')
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  async function update(action: 'set-container' | 'save-freight' | 'submit') {
+    setWorking(action)
+    setError('')
+    setMessage('')
+    try {
+      const response = await fetch(`/api/documentation/token/${encodeURIComponent(token)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(action === 'set-container' ? { action, containerNumber } : action === 'save-freight' ? { action, freightCost, freightForwarder } : { action }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to update this documentation request.')
+      updated(data.detail)
+      setMessage(action === 'set-container' ? 'Container linked. Document uploads are now enabled.' : action === 'save-freight' ? 'Freight information saved.' : 'Documentation submitted for admin review.')
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to update this documentation request.')
+    } finally {
+      setWorking('')
+    }
+  }
+
+  return <section className="documentation-content-card documentation-submission">
+    <header><div><p className="eyebrow">OVERSEAS WORKSPACE</p><h2>Complete documentation request</h2></div></header>
+    {!detail.containerId && <div className="documentation-link-container"><label><span>Container number</span><input value={containerNumber} onChange={(event) => setContainerNumber(event.target.value.toUpperCase())} placeholder="Enter the SellerCloud container number" /></label><button type="button" disabled={!containerNumber || working !== ''} onClick={() => void update('set-container')}>{working === 'set-container' ? 'Linking…' : 'Link container'}</button></div>}
+    {detail.containerId && <div className="documentation-freight-form"><label><span>Freight forwarder</span><input value={freightForwarder} onChange={(event) => setFreightForwarder(event.target.value)} /></label><label><span>Freight cost</span><input type="number" min="0" step="0.01" value={freightCost} onChange={(event) => setFreightCost(event.target.value)} placeholder="0.00" /></label><button type="button" disabled={!freightCost || working !== ''} onClick={() => void update('save-freight')}>{working === 'save-freight' ? 'Saving…' : 'Save freight'}</button><button className="submit-documentation" type="button" disabled={working !== ''} onClick={() => void update('submit')}>{working === 'submit' ? 'Submitting…' : 'Submit for admin review'}</button></div>}
+    {message && <p className="documentation-feedback success">{message}</p>}
+    {error && <p className="documentation-feedback error">{error}</p>}
+  </section>
+}
+
+function TokenFileUpload({ token, vendorId, updated }: { token: string; vendorId: string; updated: (detail: ContainerDocumentationDetail) => void }) {
+  const [kind, setKind] = useState<'document' | 'departure-photo'>('document')
+  const [documentType, setDocumentType] = useState('COMMERCIAL_INVOICE')
+  const [file, setFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function upload() {
+    if (!file) return
+    setUploading(true)
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.set('file', file)
+      formData.set('vendorId', vendorId)
+      formData.set('kind', kind)
+      if (kind === 'document') formData.set('documentType', documentType)
+      const response = await fetch(`/api/documentation/token/${encodeURIComponent(token)}/uploads`, { method: 'POST', body: formData })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to upload this file.')
+      updated(data.detail)
+      setFile(null)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to upload this file.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return <div className="token-file-upload">
+    <select value={kind} onChange={(event) => setKind(event.target.value as 'document' | 'departure-photo')}><option value="document">Document</option><option value="departure-photo">Departure photo</option></select>
+    {kind === 'document' && <select value={documentType} onChange={(event) => setDocumentType(event.target.value)}><option value="COMMERCIAL_INVOICE">Commercial Invoice</option><option value="BILL_OF_LADING">Bill of Lading</option><option value="PACKING_SLIP">Packing Slip</option><option value="ISF_FORM">ISF Form</option><option value="OTHER">Other</option></select>}
+    <label><input type="file" accept={kind === 'document' ? '.pdf,.xlsx,.xls,.jpg,.jpeg,.png,.webp' : 'image/jpeg,image/png,image/webp'} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><span>{file?.name || 'Choose file'}</span></label>
+    <button type="button" disabled={!file || uploading} onClick={() => void upload()}>{uploading ? 'Uploading…' : 'Upload'}</button>
+    {error && <small>{error}</small>}
+  </div>
+}
+
 function Fact({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }
 function DetailLine({ label, value }: { label: string; value: string }) { return <div className="documentation-detail-line"><span>{label}</span><strong>{value}</strong></div> }
 
-function VendorPackage({ detail, vendor }: { detail: ContainerDocumentationDetail; vendor: ContainerDocumentationDetail['vendors'][number] }) {
+function VendorPackage({ detail, vendor, canUpload, token, updated }: { detail: ContainerDocumentationDetail; vendor: ContainerDocumentationDetail['vendors'][number]; canUpload: boolean; token: string; updated: (detail: ContainerDocumentationDetail) => void }) {
   return <article className="documentation-vendor-package">
     <header><div><h3>{vendor.name}</h3><p>{STATUS_LABELS[vendor.status] ?? humanize(vendor.status)} · ISF {vendor.isfConfirmed ? 'confirmed' : 'not confirmed'}</p></div><span>{vendor.documents.length} documents · {vendor.photos.length} photos</span></header>
-    <div className="documentation-document-grid">{vendor.documents.map((document) => <a href={`/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(document.id)}?kind=document`} target="_blank" rel="noreferrer" key={document.id}><i>{document.fileName.toLowerCase().endsWith('.pdf') ? 'PDF' : 'FILE'}</i><span><strong>{document.fileName}</strong><small>{humanize(document.type)} · {formatSize(document.fileSize)}</small></span></a>)}</div>
-    {vendor.photos.length > 0 && <><h4>Departure photos</h4><div className="documentation-photo-grid">{vendor.photos.map((photo) => <a href={`/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=photo`} target="_blank" rel="noreferrer" key={photo.id}><img src={`/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=photo`} alt={photo.caption || photo.fileName} loading="lazy" /><span>{photo.caption || photo.fileName}</span></a>)}</div></>}
+    {canUpload && <TokenFileUpload token={token} vendorId={vendor.id} updated={updated} />}
+    <div className="documentation-document-grid">{vendor.documents.map((document) => { const url = `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(document.id)}?kind=document&token=${encodeURIComponent(token)}`; return <a href={url} target="_blank" rel="noreferrer" key={document.id}><i>{document.fileName.toLowerCase().endsWith('.pdf') ? 'PDF' : 'FILE'}</i><span><strong>{document.fileName}</strong><small>{humanize(document.type)} · {formatSize(document.fileSize)}</small></span></a> })}</div>
+    {vendor.photos.length > 0 && <><h4>Departure photos</h4><div className="documentation-photo-grid">{vendor.photos.map((photo) => { const url = `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=photo&token=${encodeURIComponent(token)}`; return <a href={url} target="_blank" rel="noreferrer" key={photo.id}><img src={url} alt={photo.caption || photo.fileName} loading="lazy" /><span>{photo.caption || photo.fileName}</span></a> })}</div></>}
     {vendor.reviewNotes && <div className="review-notes"><strong>Review notes</strong><p>{vendor.reviewNotes}</p></div>}
   </article>
 }

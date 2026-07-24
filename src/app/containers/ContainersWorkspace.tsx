@@ -307,7 +307,7 @@ function DocumentationWorkspace({ rows, canCreate, onRefresh }: { rows: Document
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [creating, setCreating] = useState(false)
   const pendingRows = useMemo(
-    () => rows.filter((row) => !row.containerId && (row.invitationStatus === 'queued' || row.invitationStatus === 'sent')),
+    () => rows.filter((row) => !row.containerId && row.invitationStatus !== 'discarded'),
     [rows],
   )
   const statuses = useMemo(() => [...new Set(pendingRows.map((row) => row.status))].sort(), [pendingRows])

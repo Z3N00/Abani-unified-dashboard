@@ -152,3 +152,58 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unable to create the documentation entry.' }, { status: 500 })
   }
 }
+
+export async function DELETE(request: Request) {
+  const user = await getApiUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (user.role !== 'ADMIN') return NextResponse.json({ error: 'Only administrators can delete pending documentation entries.' }, { status: 403 })
+
+  try {
+    const entryId = new URL(request.url).searchParams.get('id') ?? ''
+    if (!entryId) return NextResponse.json({ error: 'Documentation entry ID is required.' }, { status: 400 })
+    const db = createAdminClient()
+    const { data: entry, error: entryError } = await db.from('ContainerDocEntry').select('id,containerId,containerNumber').eq('id', entryId).maybeSingle()
+    if (entryError) throw entryError
+    if (!entry) return NextResponse.json({ error: 'Documentation entry not found.' }, { status: 404 })
+    if (entry.containerId || entry.containerNumber) {
+      return NextResponse.json({ error: 'Linked documentation entries cannot be deleted.' }, { status: 409 })
+    }
+
+    const { data: vendors, error: vendorError } = await db.from('ContainerDocVendor').select('id').eq('entryId', entryId)
+    if (vendorError) throw vendorError
+    const vendorIds = (vendors ?? []).map((vendor) => String(vendor.id))
+    const [documentsResult, departureResult, warehouseResult] = await Promise.all([
+      vendorIds.length ? db.from('ContainerDocument').select('fileUrl').in('containerDocVendorId', vendorIds) : Promise.resolve({ data: [], error: null }),
+      vendorIds.length ? db.from('ContainerDeparturePhoto').select('fileUrl').in('containerDocVendorId', vendorIds) : Promise.resolve({ data: [], error: null }),
+      db.from('ContainerWarehousePhoto').select('fileUrl').eq('entryId', entryId),
+    ])
+    for (const result of [documentsResult, departureResult, warehouseResult]) if (result.error) throw result.error
+
+    if (vendorIds.length) {
+      for (const table of ['ContainerDocument', 'ContainerDeparturePhoto', 'ContainerCost']) {
+        const { error } = await db.from(table).delete().in('containerDocVendorId', vendorIds)
+        if (error) throw error
+      }
+    }
+    for (const table of ['ContainerWarehousePhoto', 'ContainerDocFreight', 'ContainerDocActivity']) {
+      const { error } = await db.from(table).delete().eq('entryId', entryId)
+      if (error) throw error
+    }
+    const { error: emailError } = await db.from('EmailQueue').delete().eq('relatedId', entryId).eq('relatedType', 'ContainerDocEntry')
+    if (emailError) throw emailError
+    const { error: vendorsError } = await db.from('ContainerDocVendor').delete().eq('entryId', entryId)
+    if (vendorsError) throw vendorsError
+    const { error: deleteEntryError } = await db.from('ContainerDocEntry').delete().eq('id', entryId)
+    if (deleteEntryError) throw deleteEntryError
+
+    const storagePaths = [...(documentsResult.data ?? []), ...(departureResult.data ?? []), ...(warehouseResult.data ?? [])]
+      .map((file) => String(file.fileUrl ?? ''))
+      .filter((path) => path && !/^https?:\/\//i.test(path))
+    if (storagePaths.length) await db.storage.from('container-documents').remove(storagePaths)
+    clearContainerDataCache()
+    return NextResponse.json({ deleted: entryId })
+  } catch (error) {
+    console.error('Pending documentation deletion failed', error)
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to delete the documentation entry.' }, { status: 500 })
+  }
+}

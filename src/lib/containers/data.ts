@@ -118,6 +118,7 @@ export type ContainerPaymentsResult = {
 
 export type ContainerDocumentationDetail = {
   id: string
+  uploadToken: string
   containerId: string | null
   containerNumber: string
   loadingDate: string | null
@@ -559,6 +560,7 @@ export async function getContainerDocumentationDetail(entryId: string): Promise<
 
   return {
     id: text(entry, ['id']),
+    uploadToken: text(entry, ['photoToken']),
     containerId: dateValue(entry, ['containerId']),
     containerNumber: text(entry, ['containerNumber'], 'Untitled container'),
     loadingDate: dateValue(entry, ['loadingDate']),
