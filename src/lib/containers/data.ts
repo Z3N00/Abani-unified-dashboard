@@ -20,8 +20,10 @@ export function clearContainerDataCache() {
   paymentsCache = null
   detailCache.clear()
   snapshotUnavailableUntil = 0
-  revalidateTag('containers-list', 'max')
-  revalidateTag('container-details', 'max')
+  // Mutations must expire these entries immediately. The "max" profile uses
+  // stale-while-revalidate and can return the pre-upload gallery once more.
+  revalidateTag('containers-list', { expire: 0 })
+  revalidateTag('container-details', { expire: 0 })
 }
 
 export type ContainerSummary = {
@@ -486,7 +488,7 @@ export async function getContainerDocumentationDetail(entryId: string): Promise<
     db.from('Warehouse').select('id,name').order('name', { ascending: true }).limit(1000),
     db.from('User').select('id,name,email,role').limit(1000),
     db.from('ContainerDocFreight').select('*').eq('entryId', entryId).maybeSingle(),
-    db.from('ContainerWarehousePhoto').select('id,type,fileName,fileSize,uploadedByName,uploadedAt').eq('entryId', entryId).order('uploadedAt', { ascending: true }),
+    db.from('ContainerWarehousePhoto').select('id,containerDocVendorId,type,fileName,fileSize,uploadedByName,uploadedAt').eq('entryId', entryId).order('uploadedAt', { ascending: true }),
     db.from('ContainerDocActivity').select('id,vendorDocId,action,actor,details,createdAt').eq('entryId', entryId).order('createdAt', { ascending: false }).limit(250),
     db.from('EmailQueue').select('id,type,status,subject,queuedAt,sentAt').eq('relatedId', entryId).order('queuedAt', { ascending: false }).limit(1),
   ])

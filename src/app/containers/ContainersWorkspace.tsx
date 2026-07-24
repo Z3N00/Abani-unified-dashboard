@@ -290,7 +290,10 @@ export default function ContainersWorkspace({ capabilities, shipsGoEmbedToken, i
     {view === 'documentation' && (tabLoading && !documentationLoaded ? <div className="containers-empty tab-loading-panel">Loading documentation…</div> : <DocumentationWorkspace rows={documentation} canCreate={capabilities.documentationWrite} onRefresh={() => loadDocumentation(true)} />)}
     {view === 'payments' && (tabLoading && !paymentsLoaded ? <div className="containers-empty tab-loading-panel">Loading payments…</div> : <PaymentsWorkspace data={payments} />)}
     {detailLoading && <div className="detail-overlay"><div className="detail-card loading-detail">Loading shipment details...</div></div>}
-    {selected && <DetailModal detail={selected} capabilities={capabilities} shipsGoEmbedToken={shipsGoEmbedToken} close={() => setSelected(null)} />}
+    {selected && <DetailModal detail={selected} capabilities={capabilities} shipsGoEmbedToken={shipsGoEmbedToken} close={() => {
+      detailDataCache.current.delete(selected.id)
+      setSelected(null)
+    }} />}
   </>
 }
 
@@ -594,10 +597,6 @@ function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; c
   const [currentWarehousePhotos, setCurrentWarehousePhotos] = useState<Record<string, unknown>[]>(() => Array.isArray(detail.warehousePhotos) ? detail.warehousePhotos : [])
   const documentRows = [...(Array.isArray(detail.documents) ? detail.documents : []), ...uploadedDocuments]
   const departurePhotos = [...(Array.isArray(detail.departurePhotos) ? detail.departurePhotos : []), ...uploadedDeparturePhotos].filter((photo) => !removedDeparturePhotoIds.includes(display(photo.id)))
-  const documentsByVendor = new Map<string, Record<string, unknown>[]>()
-  const photosByVendor = new Map<string, Record<string, unknown>[]>()
-  for (const document of documentRows) { const id = display(document.containerDocVendorId); documentsByVendor.set(id, [...(documentsByVendor.get(id) ?? []), document]) }
-  for (const photo of departurePhotos) { const id = display(photo.containerDocVendorId); photosByVendor.set(id, [...(photosByVendor.get(id) ?? []), photo]) }
   const initialVendorCost = documentVendors[0]?.cost && typeof documentVendors[0].cost === 'object' ? documentVendors[0].cost as Record<string, unknown> : null
   const [activeVendorId, setActiveVendorId] = useState(() => display(documentVendors[0]?.id))
   const [vendorUpdates, setVendorUpdates] = useState<Record<string, Record<string, unknown>>>({})
@@ -612,8 +611,10 @@ function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; c
   const baseActiveVendor = documentVendors.find((vendor) => display(vendor.id) === activeVendorId) ?? documentVendors[0]
   const activeVendor = { ...baseActiveVendor, ...(vendorUpdates[display(baseActiveVendor.id)] ?? {}) }
   const vendorId = display(activeVendor.id)
-  const documents = documentsByVendor.get(vendorId) ?? []
-  const photos = photosByVendor.get(vendorId) ?? []
+  const activeEntryId = display(activeVendor.entryId)
+  const documents = documentRows.filter((document) => display(document.containerDocVendorId) === vendorId)
+  const photos = departurePhotos.filter((photo) => display(photo.containerDocVendorId) === vendorId)
+  const warehousePhotos = currentWarehousePhotos.filter((photo) => display(photo.containerDocVendorId) === vendorId)
   const status = display(activeVendor.status)
   const packageReady = status !== 'DOCS_PENDING' || documents.length >= 4
   const scIds = Array.isArray(activeVendor.sellercloudIds) ? activeVendor.sellercloudIds.map(String) : []
@@ -672,13 +673,13 @@ function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; c
         return <button type="button" className={id === vendorId ? 'active' : ''} onClick={() => selectVendor(id)} key={id}><span>{display(vendor.vendorName)}</span>{Array.isArray(vendor.sellercloudIds) && vendor.sellercloudIds.length > 0 && <small>SC {vendor.sellercloudIds.map(String).join(', ')}</small>}</button>
       })}
     </nav>
-    <article className="vendor-docs active-vendor-package">
+    <article className="vendor-docs active-vendor-package" key={vendorId}>
       <div className="vendor-docs-head"><div><h4>{display(activeVendor.vendorName)}</h4><p>{scIds.length ? `SellerCloud ${scIds.join(', ')}` : 'SellerCloud link pending'}</p></div><DocsStatus value={status} /></div>
       <div className={`vendor-review-banner ${packageReady ? 'ready' : 'pending'}`}><span>{packageReady ? '✓' : '!'}</span>{packageReady ? 'All documents uploaded — ready for admin review' : `${documents.length} of 4 required documents uploaded`}</div>
-      <section className="vendor-document-section"><div className="section-heading-row"><h5>Documents</h5>{canUpload && <VendorFileUpload containerId={detail.id} vendorId={vendorId} kind="document" onUploaded={(file) => setUploadedDocuments((current) => [...current, file])} />}</div>{documents.length ? <div className="vendor-document-rows">{documents.map((document) => <DocumentCard key={display(document.id)} document={document} containerId={detail.id} />)}</div> : <div className="vendor-package-empty">No documents uploaded for this vendor.</div>}</section>
+      <section className="vendor-document-section"><div className="section-heading-row"><h5>Documents</h5>{canUpload && <VendorFileUpload key={`${vendorId}-document`} containerId={detail.id} vendorId={vendorId} kind="document" onUploaded={(file) => setUploadedDocuments((current) => [...current, { ...file, containerDocVendorId: vendorId }])} />}</div>{documents.length ? <div className="vendor-document-rows">{documents.map((document) => <DocumentCard key={display(document.id)} document={document} containerId={detail.id} />)}</div> : <div className="vendor-package-empty">No documents uploaded for this vendor.</div>}</section>
       <details className="documentation-photo-section" open={photos.length > 0}>
         <summary><span>Departure Photos</span><strong>{photos.length}</strong></summary>
-        <div><div className="photo-upload-row">{canUpload && <VendorFileUpload containerId={detail.id} vendorId={vendorId} kind="departure-photo" onUploaded={(file) => setUploadedDeparturePhotos((current) => [...current, file])} />}</div>{photos.length ? <div className="photo-grid">{photos.map((photo) => <PhotoCard key={display(photo.id)} photo={photo} containerId={detail.id} canRemove={canUpload} onRemoved={(id) => setRemovedDeparturePhotoIds((current) => [...current, id])} />)}</div> : <p>No departure photos uploaded.</p>}</div>
+        <div><div className="photo-upload-row">{canUpload && <VendorFileUpload key={`${vendorId}-departure-photo`} containerId={detail.id} vendorId={vendorId} kind="departure-photo" onUploaded={(file) => setUploadedDeparturePhotos((current) => [...current, { ...file, containerDocVendorId: vendorId }])} />}</div>{photos.length ? <div className="photo-grid">{photos.map((photo) => <PhotoCard key={`${vendorId}:${display(photo.id)}`} photo={photo} containerId={detail.id} canRemove={canUpload} onRemoved={(id) => setRemovedDeparturePhotoIds((current) => [...current, id])} />)}</div> : <p>No departure photos uploaded.</p>}</div>
       </details>
       {canAdminister && <section className="documentation-admin-controls">
         <div className="document-review-panel">
@@ -700,7 +701,7 @@ function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; c
         {actionMessage && <p className="documentation-action-message success">{actionMessage}</p>}
       </section>}
     </article>
-    <WarehouseArrivalPhotos containerId={detail.id} entryId={display(activeVendor.entryId)} photos={currentWarehousePhotos} canUpload={canUpload} onUploaded={(photo) => setCurrentWarehousePhotos((current) => [...current.filter((row) => display(row.type) !== display(photo.type)), photo])} onRemoved={(id) => setCurrentWarehousePhotos((current) => current.filter((photo) => display(photo.id) !== id))} />
+    <WarehouseArrivalPhotos containerId={detail.id} entryId={activeEntryId} vendorId={vendorId} photos={warehousePhotos} canUpload={canUpload} onUploaded={(photo) => setCurrentWarehousePhotos((current) => [...current.filter((row) => !(display(row.containerDocVendorId) === vendorId && display(row.type) === display(photo.type))), { ...photo, entryId: activeEntryId, containerDocVendorId: vendorId }])} onRemoved={(type) => setCurrentWarehousePhotos((current) => current.filter((photo) => !(display(photo.containerDocVendorId) === vendorId && display(photo.type) === type)))} />
   </div>
 }
 
@@ -754,7 +755,7 @@ const WAREHOUSE_PHOTO_SLOTS = [
   { type: 'SIGNED_BOL', label: 'Signed BOL' },
 ] as const
 
-function WarehouseArrivalPhotos({ containerId, entryId, photos, canUpload, onUploaded, onRemoved }: { containerId: string; entryId: string; photos: Record<string, unknown>[]; canUpload: boolean; onUploaded: (photo: Record<string, unknown>) => void; onRemoved: (id: string) => void }) {
+function WarehouseArrivalPhotos({ containerId, entryId, vendorId, photos, canUpload, onUploaded, onRemoved }: { containerId: string; entryId: string; vendorId: string; photos: Record<string, unknown>[]; canUpload: boolean; onUploaded: (photo: Record<string, unknown>) => void; onRemoved: (type: string) => void }) {
   const [uploadingType, setUploadingType] = useState('')
   const [removingId, setRemovingId] = useState('')
   const [error, setError] = useState('')
@@ -767,6 +768,7 @@ function WarehouseArrivalPhotos({ containerId, entryId, photos, canUpload, onUpl
       const formData = new FormData()
       formData.set('file', file)
       formData.set('entryId', entryId)
+      formData.set('vendorId', vendorId)
       formData.set('photoType', photoType)
       const response = await authenticatedFetch(`/api/containers/${encodeURIComponent(containerId)}/warehouse-photos`, { method: 'POST', body: formData })
       const data = await response.json()
@@ -779,7 +781,7 @@ function WarehouseArrivalPhotos({ containerId, entryId, photos, canUpload, onUpl
     }
   }
 
-  async function remove(photoId: string) {
+  async function remove(photoId: string, photoType: string) {
     if (!window.confirm('Remove this warehouse arrival photo?')) return
     setRemovingId(photoId)
     setError('')
@@ -787,7 +789,7 @@ function WarehouseArrivalPhotos({ containerId, entryId, photos, canUpload, onUpl
       const response = await authenticatedFetch(`/api/containers/${encodeURIComponent(containerId)}/warehouse-photos?photoId=${encodeURIComponent(photoId)}`, { method: 'DELETE' })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Unable to remove this warehouse photo.')
-      onRemoved(photoId)
+      onRemoved(photoType)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Unable to remove this warehouse photo.')
     } finally {
@@ -805,7 +807,7 @@ function WarehouseArrivalPhotos({ containerId, entryId, photos, canUpload, onUpl
       return <article className={`warehouse-photo-slot${photo ? ' uploaded' : ''}`} key={slot.type}>
         <h5>{slot.label}</h5>
         {photo ? <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={`${slot.label} warehouse arrival`} /><span>View photo</span></a> : <div className="empty-photo-slot"><span>▣</span><small>Not uploaded</small></div>}
-        {canUpload && entryId !== '-' && <div className="warehouse-photo-actions"><label className="replace-photo"><input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploadingType !== '' || removingId !== ''} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void upload(slot.type, selected); event.currentTarget.value = '' }} /><span>{uploadingType === slot.type ? 'Uploading...' : photo ? 'Replace' : 'Upload'}</span></label>{photo && <button type="button" disabled={uploadingType !== '' || removingId !== ''} onClick={() => void remove(fileId)}>{removingId === fileId ? 'Removing...' : 'Remove'}</button>}</div>}
+        {canUpload && entryId !== '-' && <div className="warehouse-photo-actions"><label className="replace-photo"><input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploadingType !== '' || removingId !== ''} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void upload(slot.type, selected); event.currentTarget.value = '' }} /><span>{uploadingType === slot.type ? 'Uploading...' : photo ? 'Replace' : 'Upload'}</span></label>{photo && <button type="button" disabled={uploadingType !== '' || removingId !== ''} onClick={() => void remove(fileId, slot.type)}>{removingId === fileId ? 'Removing...' : 'Remove'}</button>}</div>}
       </article>
     })}</div>
     {error && <p className="upload-error warehouse-upload-error">{error}</p>}
