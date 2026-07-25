@@ -410,6 +410,67 @@ button { cursor: pointer; }
   font-size: 13px;
 }
 
+.container-documentation-progress {
+  margin: 0 0 22px;
+  padding: 20px 22px 18px;
+  border: 1px solid #d7dfeb;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.container-documentation-progress > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.container-documentation-progress h4 {
+  margin: 0;
+  color: var(--ui-navy);
+  font-size: 16px;
+}
+
+.container-documentation-progress > header small {
+  color: #68758b;
+  font-size: 12px;
+}
+
+.review-approved-state {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 10px 14px;
+  border: 1px solid #a7e4c4;
+  border-radius: 9px;
+  color: #087a48;
+  background: #eafaf2;
+}
+
+.review-approved-state i {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #20a766;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.review-approved-state span,
+.review-approved-state small {
+  display: block;
+}
+
+.review-approved-state small {
+  margin-top: 2px;
+  color: #4c7964;
+}
+
 .cost-payment-panel > summary {
   display: flex;
   align-items: center;
@@ -528,7 +589,42 @@ button { cursor: pointer; }
 }
 
 .documentation-freight-form {
-  grid-template-columns: 1fr 1fr auto auto;
+  grid-template-columns: 1fr 1fr auto;
+}
+
+.documentation-submit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid #dce4ef;
+}
+
+.documentation-submit-row > div {
+  display: grid;
+  gap: 5px;
+}
+
+.documentation-submit-row span {
+  color: #67738a;
+  font-size: 14px;
+}
+
+.documentation-submit-row button {
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid #138a59;
+  border-radius: 8px;
+  background: #138a59;
+  color: #fff;
+  font-weight: 700;
+}
+
+.documentation-submit-row button:disabled {
+  cursor: not-allowed;
+  opacity: .5;
 }
 
 .documentation-link-container label span,
@@ -718,6 +814,27 @@ button { cursor: pointer; }
   gap: 16px;
   padding: 18px 22px 22px;
   border-top: 1px solid #e1e6ee;
+}
+
+.warehouse-arrival-card {
+  overflow: hidden;
+  padding: 0;
+}
+
+.warehouse-arrival-card > header {
+  padding: 20px 24px;
+}
+
+.warehouse-arrival-card > header small {
+  display: block;
+  margin-top: 5px;
+  color: #67738a;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.warehouse-arrival-card .warehouse-photo-slots {
+  padding: 18px 24px 24px;
 }
 
 .warehouse-photo-slot h5 {

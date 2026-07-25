@@ -23,6 +23,8 @@ type Detail = Container & { raw: Record<string, unknown>; items: Record<string, 
 type Capabilities = { tracking: boolean; items: boolean; trucking: boolean; timeline: boolean; documentation: boolean; documentationWrite: boolean; documentationAdmin: boolean; payments: boolean; slack: boolean; pdf: boolean; sync: boolean }
 type InitialData = { containers: Container[]; archived: Container[]; documentation: DocumentationRow[]; payments: { costs: PaymentRow[]; freight: FreightRow[] } }
 
+const DOCUMENTATION_STEPS = ['DOCS_PENDING', 'DOCS_UPLOADED', 'REVIEWED', 'IN_SELLERCLOUD', 'CUSTOMS_CLEARED', 'PAID'] as const
+const DOCUMENTATION_STEP_LABELS: Record<string, string> = { DOCS_PENDING: 'Docs Pending', DOCS_UPLOADED: 'Docs Uploaded', REVIEWED: 'Reviewed', IN_SELLERCLOUD: 'In SellerCloud', CUSTOMS_CLEARED: 'Customs Cleared', PAID: 'Paid' }
 const statusClass = (status: string) => status.toLowerCase().replaceAll(' ', '-')
 const formatNumber = (value: number) => new Intl.NumberFormat('en-US').format(value)
 const formatDate = (value: string | null | undefined) => value ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value)) : '-'
@@ -310,7 +312,11 @@ function DocumentationWorkspace({ rows, canCreate, onRefresh }: { rows: Document
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [creating, setCreating] = useState(false)
   const pendingRows = useMemo(
-    () => rows.filter((row) => !row.containerId && row.invitationStatus !== 'discarded'),
+    () => rows.filter((row) =>
+      row.invitationStatus !== null &&
+      row.invitationStatus !== 'discarded' &&
+      ['DOCS_PENDING', 'DOCS_UPLOADED'].includes(row.status),
+    ),
     [rows],
   )
   const statuses = useMemo(() => [...new Set(pendingRows.map((row) => row.status))].sort(), [pendingRows])
@@ -610,12 +616,23 @@ function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; c
   if (!documentVendors.length) return <div className="detail-empty">No documentation package has been created for this container yet.</div>
   const baseActiveVendor = documentVendors.find((vendor) => display(vendor.id) === activeVendorId) ?? documentVendors[0]
   const activeVendor = { ...baseActiveVendor, ...(vendorUpdates[display(baseActiveVendor.id)] ?? {}) }
+  const currentVendors = documentVendors.map((vendor) => ({ ...vendor, ...(vendorUpdates[display(vendor.id)] ?? {}) }))
+  const storedWorkflowIndex = Math.max(0, Math.min(...currentVendors.map((vendor) => {
+    const index = DOCUMENTATION_STEPS.indexOf(display(vendor.status) as (typeof DOCUMENTATION_STEPS)[number])
+    return index < 0 ? 0 : index
+  })))
+  // REVIEWED records mean the admin-review milestone is complete. The next
+  // active operational stage is uploading/detecting the package in SellerCloud.
+  const workflowIndex = storedWorkflowIndex === DOCUMENTATION_STEPS.indexOf('REVIEWED')
+    ? DOCUMENTATION_STEPS.indexOf('IN_SELLERCLOUD')
+    : storedWorkflowIndex
   const vendorId = display(activeVendor.id)
   const activeEntryId = display(activeVendor.entryId)
   const documents = documentRows.filter((document) => display(document.containerDocVendorId) === vendorId)
   const photos = departurePhotos.filter((photo) => display(photo.containerDocVendorId) === vendorId)
   const warehousePhotos = currentWarehousePhotos.filter((photo) => display(photo.containerDocVendorId) === vendorId)
   const status = display(activeVendor.status)
+  const isApproved = DOCUMENTATION_STEPS.indexOf(status as (typeof DOCUMENTATION_STEPS)[number]) >= DOCUMENTATION_STEPS.indexOf('REVIEWED')
   const packageReady = status !== 'DOCS_PENDING' || documents.length >= 4
   const scIds = Array.isArray(activeVendor.sellercloudIds) ? activeVendor.sellercloudIds.map(String) : []
   const savedCost = activeVendor.cost && typeof activeVendor.cost === 'object' ? activeVendor.cost as Record<string, unknown> : null
@@ -667,6 +684,10 @@ function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; c
 
   return <div className="documentation-library linked-documentation">
     <header><div><p className="eyebrow">DOCUMENT LIBRARY</p><h3>Shipment documents & photos</h3></div><span className={`docs-access${canUpload ? '' : ' view'}`}>{canUpload ? 'Document access' : 'View only'}</span></header>
+    <section className="container-documentation-progress">
+      <header><h4>Documentation Progress</h4><small>Progress reflects the least-advanced vendor package.</small></header>
+      <div className="workflow-steps">{DOCUMENTATION_STEPS.map((step, index) => <div className={`workflow-step ${index < workflowIndex ? 'complete' : index === workflowIndex ? 'current' : ''}`} key={step}><div><i>{index < workflowIndex ? '✓' : '○'}</i>{index < DOCUMENTATION_STEPS.length - 1 && <b />}</div><span>{DOCUMENTATION_STEP_LABELS[step]}</span></div>)}</div>
+    </section>
     <nav className="vendor-document-tabs" aria-label="Vendor documentation packages">
       {documentVendors.map((vendor) => {
         const id = display(vendor.id)
@@ -684,8 +705,8 @@ function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; c
       {canAdminister && <section className="documentation-admin-controls">
         <div className="document-review-panel">
           <h5>Review Documents</h5>
-          <label className="isf-confirmation"><input type="checkbox" checked={isfConfirmed} onChange={(event) => setIsfConfirmed(event.target.checked)} /><span><strong>ISF filing confirmed</strong><small>Confirm that ISF has been filed with customs for this vendor&apos;s shipment.</small></span></label>
-          <div className="review-actions"><button type="button" className="approve" disabled={savingAction !== '' || !isfConfirmed} onClick={() => void updatePackage('approve')}>{savingAction === 'approve' ? 'Approving...' : 'Approve'}</button><button type="button" className="reject" disabled={savingAction !== ''} onClick={() => void updatePackage('reject')}>{savingAction === 'reject' ? 'Rejecting...' : 'Reject'}</button></div>
+          <label className="isf-confirmation"><input type="checkbox" checked={isfConfirmed} disabled={isApproved} onChange={(event) => setIsfConfirmed(event.target.checked)} /><span><strong>ISF filing confirmed</strong><small>Confirm that ISF has been filed with customs for this vendor&apos;s shipment.</small></span></label>
+          {isApproved ? <div className="review-approved-state"><i>✓</i><span><strong>Approved</strong><small>This package has completed admin review.</small></span></div> : <div className="review-actions"><button type="button" className="approve" disabled={savingAction !== '' || !isfConfirmed} onClick={() => void updatePackage('approve')}>{savingAction === 'approve' ? 'Approving...' : 'Approve'}</button><button type="button" className="reject" disabled={savingAction !== ''} onClick={() => void updatePackage('reject')}>{savingAction === 'reject' ? 'Rejecting...' : 'Reject'}</button></div>}
           {display(activeVendor.reviewedAt) !== '-' && <p className="review-history">Last reviewed {formatDate(display(activeVendor.reviewedAt))}{display(activeVendor.reviewNotes) !== '-' ? ` — ${display(activeVendor.reviewNotes)}` : ''}</p>}
         </div>
         <details className="cost-payment-panel" open={Boolean(savedCost)}>

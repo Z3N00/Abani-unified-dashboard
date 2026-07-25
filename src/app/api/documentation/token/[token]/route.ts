@@ -59,16 +59,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ token
       const { data: vendors, error: vendorError } = await db.from('ContainerDocVendor').select('id').eq('entryId', entry.id)
       if (vendorError) throw vendorError
       const vendorIds = (vendors ?? []).map((vendor) => String(vendor.id))
-      const { data: documents, error: documentsError } = vendorIds.length
-        ? await db.from('ContainerDocument').select('containerDocVendorId,type').in('containerDocVendorId', vendorIds)
-        : { data: [], error: null }
-      if (documentsError) throw documentsError
-      const required = ['COMMERCIAL_INVOICE', 'BILL_OF_LADING', 'PACKING_SLIP', 'ISF_FORM']
-      const incomplete = vendorIds.filter((vendorId) => {
-        const types = new Set((documents ?? []).filter((document) => document.containerDocVendorId === vendorId).map((document) => String(document.type)))
-        return required.some((type) => !types.has(type))
-      })
-      if (incomplete.length) return NextResponse.json({ error: 'Upload all four required documents for every vendor before submitting.' }, { status: 400 })
       const { error: statusError } = await db.from('ContainerDocVendor').update({ status: 'DOCS_UPLOADED', updatedAt: now }).in('id', vendorIds)
       if (statusError) throw statusError
       const { error: submitError } = await db.from('ContainerDocEntry').update({ isSubmitted: true, submittedAt: now, updatedAt: now }).eq('id', entry.id)

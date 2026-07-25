@@ -103,7 +103,7 @@ export default function DocumentationDetail({ initialDetail, canEdit, canUpload,
 
     <div className="documentation-next">Next: {nextAction}</div>
 
-    {canUpload && token && !detail.isSubmitted && <DocumentationSubmission detail={detail} token={token} updated={setDetail} />}
+    {canUpload && token && !detail.isSubmitted && !detail.containerId && <DocumentationSubmission detail={detail} token={token} updated={setDetail} />}
 
     <section className="documentation-content-card">
       <header><div><p className="eyebrow">DOCUMENT LIBRARY</p><h2>Shipment documents & photos</h2></div><div><strong>{totalDocuments}</strong> documents · <strong>{totalPhotos}</strong> photos{canUpload && <span className={detail.containerId ? 'upload-enabled' : 'upload-locked'}>{detail.containerId ? 'Upload enabled' : 'Upload locked'}</span>}</div></header>
@@ -111,7 +111,9 @@ export default function DocumentationDetail({ initialDetail, canEdit, canUpload,
       {detail.vendors.map((vendor) => <VendorPackage detail={detail} vendor={vendor} canUpload={canUpload && !detail.isSubmitted && Boolean(detail.containerId)} token={token} updated={setDetail} key={vendor.id} />)}
     </section>
 
-    {detail.warehousePhotos.length > 0 && <section className="documentation-content-card"><header><div><p className="eyebrow">WAREHOUSE RECEIVING</p><h2>Warehouse photos</h2></div><strong>{detail.warehousePhotos.length} photos</strong></header><div className="documentation-photo-grid">{detail.warehousePhotos.map((photo) => { const url = `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=warehouse-photo&token=${encodeURIComponent(token)}`; return <a href={url} target="_blank" rel="noreferrer" key={photo.id}><img src={url} alt={photo.fileName} /><span>{humanize(photo.type)}</span></a> })}</div></section>}
+    {detail.containerId && <TokenWarehouseArrivalPhotos detail={detail} token={token} canUpload={canUpload && !detail.isSubmitted} updated={setDetail} />}
+
+    {canUpload && token && !detail.isSubmitted && Boolean(detail.containerId) && <DocumentationSubmission detail={detail} token={token} updated={setDetail} />}
 
     <section className="documentation-lower-grid">
       <article className="documentation-content-card compact"><h2>Freight & payment</h2><DetailLine label="Freight forwarder" value={detail.freight?.freightForwarder || detail.freightForwarder} /><DetailLine label="Freight cost" value={detail.freight ? formatCurrency(detail.freight.freightCost) : 'Not added'} />{detail.vendors.map((vendor) => <div className="vendor-payment" key={vendor.id}><strong>{vendor.name}</strong><DetailLine label="Vendor cost" value={vendor.cost ? formatCurrency(vendor.cost.totalCost) : 'Not added'} /><DetailLine label="Payment terms" value={vendor.cost ? humanize(vendor.cost.paymentTerms) : '—'} /><DetailLine label="Due date" value={vendor.cost ? formatDate(vendor.cost.paymentDueDate) : '—'} /><DetailLine label="Payment status" value={vendor.cost?.isPaid ? `Paid ${formatDate(vendor.cost.paidAt)}` : 'Unpaid'} /></div>)}</article>
@@ -129,7 +131,6 @@ function DocumentationSubmission({ detail, token, updated }: { detail: Container
   const [working, setWorking] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-
   async function update(action: 'set-container' | 'save-freight' | 'submit') {
     setWorking(action)
     setError('')
@@ -154,7 +155,10 @@ function DocumentationSubmission({ detail, token, updated }: { detail: Container
   return <section className="documentation-content-card documentation-submission">
     <header><div><p className="eyebrow">OVERSEAS WORKSPACE</p><h2>Complete documentation request</h2></div></header>
     {!detail.containerId && <div className="documentation-link-container"><label><span>Container number</span><input value={containerNumber} onChange={(event) => setContainerNumber(event.target.value.toUpperCase())} placeholder="Enter the SellerCloud container number" /></label><button type="button" disabled={!containerNumber || working !== ''} onClick={() => void update('set-container')}>{working === 'set-container' ? 'Linking…' : 'Link container'}</button></div>}
-    {detail.containerId && <div className="documentation-freight-form"><label><span>Freight forwarder</span><input value={freightForwarder} onChange={(event) => setFreightForwarder(event.target.value)} /></label><label><span>Freight cost</span><input type="number" min="0" step="0.01" value={freightCost} onChange={(event) => setFreightCost(event.target.value)} placeholder="0.00" /></label><button type="button" disabled={!freightCost || working !== ''} onClick={() => void update('save-freight')}>{working === 'save-freight' ? 'Saving…' : 'Save freight'}</button><button className="submit-documentation" type="button" disabled={working !== ''} onClick={() => void update('submit')}>{working === 'submit' ? 'Submitting…' : 'Submit for admin review'}</button></div>}
+    {detail.containerId && <>
+      <div className="documentation-freight-form"><label><span>Freight forwarder</span><input value={freightForwarder} onChange={(event) => setFreightForwarder(event.target.value)} /></label><label><span>Freight cost</span><input type="number" min="0" step="0.01" value={freightCost} onChange={(event) => setFreightCost(event.target.value)} placeholder="0.00" /></label><button type="button" disabled={!freightCost || !freightForwarder.trim() || working !== ''} onClick={() => void update('save-freight')}>{working === 'save-freight' ? 'Saving…' : 'Save freight'}</button></div>
+      <div className="documentation-submit-row"><div><strong>Submit Documentation</strong><span>Send the current documentation package to the admin for review. Missing items can be handled during review.</span></div><button className="submit-documentation" type="button" disabled={working !== ''} onClick={() => void update('submit')}>{working === 'submit' ? 'Submitting…' : 'Submit for admin review'}</button></div>
+    </>}
     {message && <p className="documentation-feedback success">{message}</p>}
     {error && <p className="documentation-feedback error">{error}</p>}
   </section>
@@ -196,6 +200,69 @@ function TokenFileUpload({ token, vendorId, updated }: { token: string; vendorId
     <button type="button" disabled={!file || uploading} onClick={() => void upload()}>{uploading ? 'Uploading…' : 'Upload'}</button>
     {error && <small>{error}</small>}
   </div>
+}
+
+const WAREHOUSE_PHOTO_SLOTS = [
+  { type: 'SEAL', label: 'Seal' },
+  { type: 'OPENED', label: 'Opened' },
+  { type: 'EMPTY', label: 'Empty' },
+  { type: 'SIGNED_BOL', label: 'Signed BOL' },
+] as const
+
+function TokenWarehouseArrivalPhotos({ detail, token, canUpload, updated }: { detail: ContainerDocumentationDetail; token: string; canUpload: boolean; updated: (detail: ContainerDocumentationDetail) => void }) {
+  const [uploadingType, setUploadingType] = useState('')
+  const [removingId, setRemovingId] = useState('')
+  const [error, setError] = useState('')
+  const vendorId = detail.vendors[0]?.id ?? ''
+
+  async function upload(photoType: string, file: File) {
+    setUploadingType(photoType)
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.set('file', file)
+      formData.set('vendorId', vendorId)
+      formData.set('kind', 'warehouse-photo')
+      formData.set('photoType', photoType)
+      const response = await fetch(`/api/documentation/token/${encodeURIComponent(token)}/uploads`, { method: 'POST', body: formData })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to upload this warehouse arrival photo.')
+      updated(data.detail)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to upload this warehouse arrival photo.')
+    } finally {
+      setUploadingType('')
+    }
+  }
+
+  async function remove(photoId: string) {
+    setRemovingId(photoId)
+    setError('')
+    try {
+      const response = await fetch(`/api/documentation/token/${encodeURIComponent(token)}/uploads?photoId=${encodeURIComponent(photoId)}&kind=warehouse-photo`, { method: 'DELETE' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to remove this warehouse arrival photo.')
+      updated(data.detail)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to remove this warehouse arrival photo.')
+    } finally {
+      setRemovingId('')
+    }
+  }
+
+  return <section className="documentation-content-card warehouse-arrival-card">
+    <header><div><p className="eyebrow">WAREHOUSE RECEIVING</p><h2>Warehouse Arrival Photos</h2><small>Receiving evidence shared across all vendor packages</small></div><strong>({detail.warehousePhotos.length}/4)</strong></header>
+    <div className="warehouse-photo-slots">{WAREHOUSE_PHOTO_SLOTS.map((slot) => {
+      const photo = detail.warehousePhotos.find((candidate) => candidate.type === slot.type)
+      const url = photo ? `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=warehouse-photo&token=${encodeURIComponent(token)}` : ''
+      return <article className={`warehouse-photo-slot${photo ? ' uploaded' : ''}`} key={slot.type}>
+        <h5>{slot.label}</h5>
+        {photo ? <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={`${slot.label} warehouse arrival`} /><span>View photo</span></a> : <div className="empty-photo-slot"><span aria-hidden="true">▣</span><small>Not uploaded</small></div>}
+        {canUpload && <div className="warehouse-photo-actions"><label className="replace-photo"><input type="file" accept="image/jpeg,image/png,image/webp" disabled={!vendorId || uploadingType !== '' || removingId !== ''} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void upload(slot.type, selected); event.currentTarget.value = '' }} /><span>{uploadingType === slot.type ? 'Uploading…' : photo ? 'Replace' : 'Upload'}</span></label>{photo && <button type="button" disabled={uploadingType !== '' || removingId !== ''} onClick={() => void remove(photo.id)}>{removingId === photo.id ? 'Removing…' : 'Remove'}</button>}</div>}
+      </article>
+    })}</div>
+    {error && <p className="documentation-feedback error">{error}</p>}
+  </section>
 }
 
 function Fact({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }
