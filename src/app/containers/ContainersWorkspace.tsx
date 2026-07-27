@@ -540,7 +540,13 @@ function DetailModal({ detail, capabilities, shipsGoEmbedToken, initialTab, clos
     try {
       const [{ jsPDF }, autoTableModule] = await Promise.all([import('jspdf'), import('jspdf-autotable')])
       const autoTable = autoTableModule.default
-      const document = new jsPDF({ unit: 'pt', format: 'letter' })
+      const document = new jsPDF({ unit: 'pt', format: 'a4' })
+      const pageWidth = document.internal.pageSize.getWidth()
+      const pageHeight = document.internal.pageSize.getHeight()
+      const margin = 42
+      const navy: [number, number, number] = [26, 48, 99]
+      const blue: [number, number, number] = [59, 130, 246]
+      const red: [number, number, number] = [232, 35, 35]
       const lastTableY = () => (document as typeof document & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 108
       const raw = detail.raw
       const value = (...keys: string[]) => {
@@ -550,77 +556,174 @@ function DetailModal({ detail, capabilities, shipsGoEmbedToken, initialTab, clos
         }
         return '-'
       }
-      const reportDate = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date())
-      document.setFillColor(26, 48, 99)
-      document.rect(0, 0, 612, 88, 'F')
-      document.setTextColor(255, 255, 255)
-      document.setFont('helvetica', 'bold')
-      document.setFontSize(21)
-      document.text(`Container ${detail.number}`, 38, 39)
-      document.setFontSize(10)
-      document.setFont('helvetica', 'normal')
-      document.text(`SC IDs: ${detail.sellercloudIds.join(', ') || '-'}   |   Status: ${detail.status}`, 38, 59)
-      document.text(`Generated ${reportDate}`, 38, 75)
+      const itemSku = (item: Record<string, unknown>) => display(item.sku ?? item.productID ?? item.productId)
+      const itemSize = (item: Record<string, unknown>) => display(item.size)
+      const itemQty = (item: Record<string, unknown>) => Number(item.quantity) || 0
+      const sectionHeading = (title: string, y: number) => {
+        document.setTextColor(18, 18, 18)
+        document.setFont('helvetica', 'bold')
+        document.setFontSize(13)
+        document.text(title, margin, y)
+        document.setDrawColor(190, 190, 190)
+        document.line(margin, y + 5, pageWidth - margin, y + 5)
+      }
+      const tableOptions = {
+        theme: 'grid' as const,
+        headStyles: { fillColor: blue, textColor: [255, 255, 255] as [number, number, number], fontStyle: 'bold' as const },
+        styles: { fontSize: 8, cellPadding: 4, lineColor: [195, 195, 195] as [number, number, number], lineWidth: .4 },
+        alternateRowStyles: { fillColor: [246, 246, 246] as [number, number, number] },
+        margin: { left: margin, right: margin, bottom: 34 },
+      }
 
-      autoTable(document, {
-        startY: 108,
-        head: [['Shipment overview', 'Value', 'Shipment overview', 'Value']],
-        body: [
-          ['Warehouse', detail.warehouse || '-', 'Carrier', detail.carrier || '-'],
-          ['Shipped', formatDate(detail.shippedOn), 'Vessel', detail.vessel || '-'],
-          ['ETA port', formatDate(detail.etaPort), 'Port', detail.port || '-'],
-          ['Quantity', formatNumber(detail.quantity), 'Received', `${formatNumber(detail.receivedQuantity)} (${detail.quantity > 0 ? Math.min(100, Math.round((detail.receivedQuantity / detail.quantity) * 100)) : 0}%)`],
-          ['ShipsGo status', value('shipsgoStatus', 'status'), 'ShipsGo ETA', value('shipsgoEta') === '-' ? '-' : formatDate(value('shipsgoEta'))],
-          ['Putaway deadline', value('putawayDeadline') === '-' ? '-' : formatDate(value('putawayDeadline')), 'Document status', detail.docsStatus ? humanize(detail.docsStatus) : '-'],
-        ],
-        theme: 'grid',
-        headStyles: { fillColor: [49, 112, 235] },
-        styles: { fontSize: 9, cellPadding: 5 },
+      // The production packet uses the navy Abani wordmark on a white page.
+      try {
+        const svg = (await (await fetch('/abani-wordmark.svg')).text()).replaceAll('#F8FAFC', '#1A3063')
+        const logoUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+        const logo = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const image = new Image()
+          image.onload = () => resolve(image)
+          image.onerror = reject
+          image.src = logoUrl
+        })
+        const logoCanvas = window.document.createElement('canvas')
+        logoCanvas.width = 672
+        logoCanvas.height = 136
+        logoCanvas.getContext('2d')?.drawImage(logo, 0, 0, logoCanvas.width, logoCanvas.height)
+        document.addImage(logoCanvas.toDataURL('image/png'), 'PNG', margin, 37, 126, 25.5)
+        URL.revokeObjectURL(logoUrl)
+      } catch {
+        document.setTextColor(...navy)
+        document.setFont('helvetica', 'normal')
+        document.setFontSize(25)
+        document.text('ABANI', margin, 60)
+      }
+      document.setTextColor(0, 0, 0)
+      document.setFont('helvetica', 'bold')
+      document.setFontSize(18)
+      document.text(detail.number, pageWidth - margin, 58, { align: 'right' })
+      document.setDrawColor(175, 175, 175)
+      document.line(margin, 83, pageWidth - margin, 83)
+
+      document.setFontSize(10)
+      const summaryRows = [
+        ['Warehouse', detail.warehouse || '-', 'Total Qty', formatNumber(detail.quantity)],
+        ['Delivery', value('deliveryDate', 'scheduledDeliveryDate'), 'Load Type', value('loadType')],
+        ['SC IDs', detail.sellercloudIds.join(', ') || '-', '', ''],
+      ]
+      summaryRows.forEach((row, index) => {
+        const y = 109 + (index * 21)
+        document.setFont('helvetica', 'bold')
+        document.text(row[0], margin + 6, y)
+        document.text(row[2], 322, y)
+        document.setFont('helvetica', 'normal')
+        document.text(row[1], 138, y)
+        document.text(row[3], 412, y)
       })
 
-      if (capabilities.items && detail.items.length) {
+      const sizes = new Map<string, number>()
+      detail.items.forEach((item) => sizes.set(itemSize(item), (sizes.get(itemSize(item)) ?? 0) + itemQty(item)))
+      const sizeRows = [...sizes.entries()].sort((left, right) => right[1] - left[1])
+      sectionHeading('Size Breakdown', 183)
+      autoTable(document, {
+        ...tableOptions,
+        startY: 196,
+        tableWidth: 265,
+        head: [['Size', 'Qty', '%']],
+        body: [
+          ...sizeRows.map(([size, quantity]) => [size, formatNumber(quantity), `${detail.quantity ? Math.round((quantity / detail.quantity) * 100) : 0}%`]),
+          ['TOTAL', formatNumber(detail.quantity), '100%'],
+        ],
+        margin: { left: margin },
+        columnStyles: { 0: { cellWidth: 120 }, 1: { cellWidth: 72 }, 2: { cellWidth: 73 } },
+      })
+
+      if (sizeRows.length) {
+        const chartCanvas = window.document.createElement('canvas')
+        chartCanvas.width = 480
+        chartCanvas.height = 400
+        const context = chartCanvas.getContext('2d')
+        if (context) {
+          const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
+          const total = sizeRows.reduce((sum, [, quantity]) => sum + quantity, 0)
+          let angle = -Math.PI / 2
+          sizeRows.forEach(([, quantity], index) => {
+            const slice = total ? (quantity / total) * Math.PI * 2 : 0
+            context.beginPath()
+            context.moveTo(240, 180)
+            context.arc(240, 180, 142, angle, angle + slice)
+            context.closePath()
+            context.fillStyle = colors[index % colors.length]
+            context.fill()
+            context.strokeStyle = '#ffffff'
+            context.lineWidth = 2
+            context.stroke()
+            angle += slice
+          })
+          context.font = 'bold 18px Arial'
+          context.textAlign = 'center'
+          context.textBaseline = 'middle'
+          angle = -Math.PI / 2
+          sizeRows.forEach(([, quantity]) => {
+            const slice = total ? (quantity / total) * Math.PI * 2 : 0
+            if (slice > .17) {
+              const center = angle + slice / 2
+              context.fillStyle = '#ffffff'
+              context.fillText(`${Math.round((quantity / total) * 100)}%`, 240 + Math.cos(center) * 91, 180 + Math.sin(center) * 91)
+            }
+            angle += slice
+          })
+          context.font = '13px Arial'
+          context.textAlign = 'left'
+          sizeRows.forEach(([size], index) => {
+            const x = 25 + ((index % 3) * 150)
+            const y = 350 + (Math.floor(index / 3) * 22)
+            context.fillStyle = colors[index % colors.length]
+            context.fillRect(x, y - 11, 13, 13)
+            context.fillStyle = '#333333'
+            context.fillText(size, x + 18, y)
+          })
+          document.addImage(chartCanvas.toDataURL('image/png'), 'PNG', 332, 194, 218, 182)
+        }
+      }
+
+      let nextY = Math.max(lastTableY(), 386) + 27
+      if (detail.priorityRestock.length) {
+        if (nextY > pageHeight - 180) {
+          document.addPage()
+          nextY = 54
+        }
+        sectionHeading(`Priority Restock - ${detail.warehouse}`, nextY)
         autoTable(document, {
-          startY: lastTableY() + 22,
-          head: [['SellerCloud items', 'Size', 'Qty', 'Received']],
-          body: detail.items.map((item) => [
-            display(item.sku ?? item.productID ?? item.productId),
-            display(item.size),
-            formatNumber(Number(item.quantity) || 0),
-            formatNumber(Number(item.receivedQty ?? item.receivedQuantity) || 0),
-          ]),
-          theme: 'striped',
-          headStyles: { fillColor: [26, 48, 99] },
-          styles: { fontSize: 8, cellPadding: 4 },
+          ...tableOptions,
+          startY: nextY + 14,
+          head: [['SKU', 'On Hand', 'Incoming']],
+          body: detail.priorityRestock.map((row) => [row.sku, formatNumber(row.onHand), formatNumber(row.incoming)]),
+          headStyles: { fillColor: red, textColor: [255, 255, 255], fontStyle: 'bold' },
+          didParseCell: (hook) => {
+            if (hook.section === 'body' && hook.column.index === 1) hook.cell.styles.textColor = red
+          },
         })
       }
 
-      if (capabilities.trucking && detail.trucking) {
-        autoTable(document, {
-          startY: lastTableY() + 22,
-          head: [['Trucking details', 'Value']],
-          body: Object.entries(detail.trucking)
-            .filter(([, fieldValue]) => fieldValue !== null && fieldValue !== undefined && fieldValue !== '')
-            .map(([key, fieldValue]) => [humanize(key), display(fieldValue)]),
-          theme: 'grid',
-          headStyles: { fillColor: [26, 48, 99] },
-          styles: { fontSize: 8, cellPadding: 4 },
-        })
-      }
-
-      if (capabilities.timeline && detail.milestones.length) {
-        autoTable(document, {
-          startY: lastTableY() + 22,
-          head: [['Timeline', 'Location', 'Date', 'Type']],
-          body: detail.milestones.map((milestone) => [
-            eventName(milestone.milestone),
-            milestone.location || '-',
-            milestone.date ? formatDate(milestone.date) : '-',
-            milestone.isActual ? 'Actual' : 'Estimated',
-          ]),
-          theme: 'striped',
-          headStyles: { fillColor: [26, 48, 99] },
-          styles: { fontSize: 8, cellPadding: 4 },
-        })
+      if (capabilities.items) {
+        for (const entry of detail.scEntries) {
+          document.addPage()
+          sectionHeading(`SC #${entry.id} - ${entry.vendor} (${formatNumber(entry.quantity)} qty)`, 54)
+          const midpoint = Math.ceil(entry.items.length / 2)
+          const columns = [entry.items.slice(0, midpoint), entry.items.slice(midpoint)]
+          columns.forEach((items, columnIndex) => {
+            if (!items.length) return
+            autoTable(document, {
+              ...tableOptions,
+              startY: 68,
+              tableWidth: 252,
+              margin: { left: columnIndex === 0 ? margin : 301, right: columnIndex === 0 ? 301 : margin, bottom: 34 },
+              head: [['SKU', 'Size', 'Qty']],
+              body: items.map((item) => [itemSku(item), itemSize(item), formatNumber(itemQty(item))]),
+              columnStyles: { 0: { cellWidth: 112 }, 1: { cellWidth: 90 }, 2: { cellWidth: 50, halign: 'right' } },
+            })
+          })
+        }
       }
 
       const pages = document.getNumberOfPages()
@@ -628,10 +731,10 @@ function DetailModal({ detail, capabilities, shipsGoEmbedToken, initialTab, clos
         document.setPage(page)
         document.setFontSize(8)
         document.setTextColor(100, 116, 139)
-        document.text('Abani Rugs Operations', 38, 770)
-        document.text(`Page ${page} of ${pages}`, 574, 770, { align: 'right' })
+        document.text('Abani Rugs Operations', margin, pageHeight - 18)
+        document.text(`Page ${page} of ${pages}`, pageWidth - margin, pageHeight - 18, { align: 'right' })
       }
-      document.save(`${detail.number}-container-report.pdf`)
+      document.save(`${detail.number}.pdf`)
     } catch (exportError) {
       setSlackFeedback({ type: 'error', message: exportError instanceof Error ? exportError.message : 'Unable to export this container PDF.' })
     } finally {

@@ -217,7 +217,9 @@ button { cursor: pointer; }
 .integration-status-card { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 16px; margin-bottom: 18px; padding: 20px; border: 1px solid #dbe2eb; border-radius: 12px; background: #fff; }
 .integration-status-card h2 { margin: 3px 0 5px; color: var(--ui-text); font-size: 20px; }
 .integration-status-card p { margin: 0; color: var(--ui-muted); }
-.integration-status-card button { min-height: 42px; padding: 0 18px; border: 0; border-radius: 8px; background: var(--ui-primary); color: #fff; font-weight: 700; cursor: pointer; }
+.integration-status-card button { min-height: 42px; padding: 0 18px; border: 1px solid #2563eb; border-radius: 8px; background: var(--ui-blue); color: #fff; box-shadow: 0 5px 14px rgba(37,99,235,.16); font-weight: 700; cursor: pointer; }
+.integration-status-card button:hover:not(:disabled) { border-color: #1d4ed8; background: #2563eb; }
+.integration-status-card button:focus-visible { outline: 3px solid rgba(59,130,246,.25); outline-offset: 2px; }
 .integration-status-card button:disabled { cursor: not-allowed; opacity: .55; }
 .integration-status-card .integration-feedback { grid-column: 1 / -1; padding: 11px 13px; border-radius: 8px; }
 .integration-status-card .integration-feedback.success { background: #ecfdf5; color: #047857; }
