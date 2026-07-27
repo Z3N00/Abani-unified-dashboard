@@ -48,6 +48,8 @@ export async function POST(request: Request) {
     if (!warehouseId) return NextResponse.json({ error: 'Select a warehouse.' }, { status: 400 })
     if (!overseasRepId) return NextResponse.json({ error: 'Select an overseas representative.' }, { status: 400 })
     if (!loadingDate) return NextResponse.json({ error: 'Choose a loading date.' }, { status: 400 })
+    if (!shippingLine) return NextResponse.json({ error: 'Enter the shipping line.' }, { status: 400 })
+    if (!destinationPort) return NextResponse.json({ error: 'Enter the destination port.' }, { status: 400 })
 
     const db = createAdminClient()
     const [vendorResult, warehouseResult, representativeResult] = await Promise.all([

@@ -433,8 +433,8 @@ function NewDocumentationEntry({ close, onCreated }: { close: () => void; onCrea
         <label><span>Overseas Representative <b>*</b></span><select required value={form.overseasRepId} onChange={(event) => setForm({ ...form, overseasRepId: event.target.value })}><option value="">Select overseas rep…</option>{representatives.map((representative) => <option value={representative.id} key={representative.id}>{representative.name} · {representative.email}</option>)}</select><small>This person will receive an invitation through the admin Email Queue.</small></label>
         <label><span>Loading date <b>*</b></span><input required type="date" value={form.loadingDate} onChange={(event) => setForm({ ...form, loadingDate: event.target.value })} /></label>
         <div className="documentation-create-grid">
-          <label>Shipping line <small>Optional</small><input value={form.shippingLine} onChange={(event) => setForm({ ...form, shippingLine: event.target.value })} /></label>
-          <label>Destination port <small>Optional</small><input value={form.destinationPort} onChange={(event) => setForm({ ...form, destinationPort: event.target.value })} /></label>
+          <label>Shipping line <b>*</b><input required value={form.shippingLine} onChange={(event) => setForm({ ...form, shippingLine: event.target.value })} /></label>
+          <label>Destination port <b>*</b><input required value={form.destinationPort} onChange={(event) => setForm({ ...form, destinationPort: event.target.value })} /></label>
         </div>
         <label>Freight forwarder <small>Optional</small><input value={form.freightForwarder} onChange={(event) => setForm({ ...form, freightForwarder: event.target.value })} /></label>
       </>}
@@ -727,26 +727,28 @@ function Documentation({ detail, canUpload, canAdminister }: { detail: Detail; c
 }
 
 function VendorFileUpload({ containerId, vendorId, kind, onUploaded }: { containerId: string; vendorId: string; kind: 'document' | 'departure-photo'; onUploaded: (file: Record<string, unknown>) => void }) {
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
   const [documentType, setDocumentType] = useState('COMMERCIAL_INVOICE')
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
 
   async function upload() {
-    if (!file) return
+    if (!files.length) return
     setUploading(true)
     setError('')
     try {
-      const formData = new FormData()
-      formData.set('file', file)
-      formData.set('vendorId', vendorId)
-      formData.set('kind', kind)
-      if (kind === 'document') formData.set('documentType', documentType)
-      const response = await authenticatedFetch(`/api/containers/${encodeURIComponent(containerId)}/documents`, { method: 'POST', body: formData })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error || 'Unable to upload this file.')
-      onUploaded(data.file as Record<string, unknown>)
-      setFile(null)
+      for (const file of files) {
+        const formData = new FormData()
+        formData.set('file', file)
+        formData.set('vendorId', vendorId)
+        formData.set('kind', kind)
+        if (kind === 'document') formData.set('documentType', documentType)
+        const response = await authenticatedFetch(`/api/containers/${encodeURIComponent(containerId)}/documents`, { method: 'POST', body: formData })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.error || `Unable to upload ${file.name}.`)
+        onUploaded(data.file as Record<string, unknown>)
+      }
+      setFiles([])
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Unable to upload this file.')
     } finally {
@@ -763,8 +765,8 @@ function VendorFileUpload({ containerId, vendorId, kind, onUploaded }: { contain
       <option value="ARRIVAL_NOTICE">Arrival Notice</option>
       <option value="OTHER">Other</option>
     </select>}
-    <label className="file-picker"><input type="file" accept={kind === 'document' ? ".pdf,.xlsx,.xls,.jpg,.jpeg,.png,.webp" : "image/jpeg,image/png,image/webp"} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><span>{file ? file.name : kind === 'document' ? 'Choose document' : 'Choose photo'}</span></label>
-    <button type="button" disabled={!file || uploading} onClick={() => void upload()}>{uploading ? 'Uploading...' : 'Upload'}</button>
+    <label className="file-picker"><input type="file" multiple={kind === 'departure-photo'} accept={kind === 'document' ? ".pdf,.xlsx,.xls,.jpg,.jpeg,.png,.webp" : "image/jpeg,image/png,image/webp"} onChange={(event) => setFiles(Array.from(event.target.files ?? []))} /><span>{files.length ? kind === 'departure-photo' && files.length > 1 ? `${files.length} photos selected` : files[0].name : kind === 'document' ? 'Choose document' : 'Choose photos'}</span></label>
+    <button type="button" disabled={!files.length || uploading} onClick={() => void upload()}>{uploading ? `Uploading ${files.length}...` : files.length > 1 ? `Upload ${files.length} photos` : 'Upload'}</button>
     {error && <small className="upload-error">{error}</small>}
   </div>
 }

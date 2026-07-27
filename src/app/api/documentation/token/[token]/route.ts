@@ -30,6 +30,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ token
     const body = await request.json()
     const action = String(body.action ?? '')
     const now = new Date().toISOString()
+    const { data: representative } = entry.overseasRepId
+      ? await db.from('User').select('name,email').eq('id', entry.overseasRepId).maybeSingle()
+      : { data: null }
+    const actor = representative?.name || representative?.email || 'Overseas representative'
 
     if (action === 'set-container') {
       if (entry.isSubmitted) return NextResponse.json({ error: 'This documentation request has already been submitted.' }, { status: 409 })
@@ -41,7 +45,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ token
       if (!container) return NextResponse.json({ error: 'That container number was not found in SellerCloud container data.' }, { status: 404 })
       const { error } = await db.from('ContainerDocEntry').update({ containerId: container.id, containerNumber: container.containerName, updatedAt: now }).eq('id', entry.id)
       if (error) throw error
-      await db.from('ContainerDocActivity').insert({ id: crypto.randomUUID(), entryId: entry.id, vendorDocId: null, action: 'CONTAINER_LINKED', actor: 'Overseas documentation link', details: { containerNumber: container.containerName }, createdAt: now })
+      await db.from('ContainerDocActivity').insert({ id: crypto.randomUUID(), entryId: entry.id, vendorDocId: null, action: 'CONTAINER_LINKED', actor, details: { containerNumber: container.containerName }, createdAt: now })
     } else if (action === 'save-freight') {
       const freightCost = Number(body.freightCost)
       const freightForwarder = String(body.freightForwarder ?? '').trim()
@@ -54,6 +58,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ token
         : await db.from('ContainerDocFreight').insert({ id: crypto.randomUUID(), entryId: entry.id, ...values, createdAt: now })
       if (result.error) throw result.error
       await db.from('ContainerDocEntry').update({ freightForwarder: freightForwarder || null, updatedAt: now }).eq('id', entry.id)
+      await db.from('ContainerDocActivity').insert({ id: crypto.randomUUID(), entryId: entry.id, vendorDocId: null, action: 'FREIGHT_UPDATED', actor, details: { freightForwarder }, createdAt: now })
     } else if (action === 'submit') {
       if (!entry.containerId || !entry.containerNumber) return NextResponse.json({ error: 'Set the container number before submitting.' }, { status: 400 })
       const { data: vendors, error: vendorError } = await db.from('ContainerDocVendor').select('id').eq('entryId', entry.id)
@@ -63,7 +68,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ token
       if (statusError) throw statusError
       const { error: submitError } = await db.from('ContainerDocEntry').update({ isSubmitted: true, submittedAt: now, updatedAt: now }).eq('id', entry.id)
       if (submitError) throw submitError
-      await db.from('ContainerDocActivity').insert({ id: crypto.randomUUID(), entryId: entry.id, vendorDocId: null, action: 'DOCUMENTATION_SUBMITTED', actor: 'Overseas documentation link', details: { vendorCount: vendorIds.length }, createdAt: now })
+      await db.from('ContainerDocActivity').insert({ id: crypto.randomUUID(), entryId: entry.id, vendorDocId: null, action: 'DOCUMENTATION_SUBMITTED', actor, details: { vendorCount: vendorIds.length }, createdAt: now })
     } else {
       return NextResponse.json({ error: 'Unsupported documentation action.' }, { status: 400 })
     }

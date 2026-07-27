@@ -3,7 +3,7 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ContainerDocumentationDetail } from '@/lib/containers/data'
 import { authenticatedFetch } from '@/lib/auth/client-fetch'
 
@@ -117,7 +117,7 @@ export default function DocumentationDetail({ initialDetail, canEdit, canUpload,
 
     <section className="documentation-lower-grid">
       <article className="documentation-content-card compact"><h2>Freight & payment</h2><DetailLine label="Freight forwarder" value={detail.freight?.freightForwarder || detail.freightForwarder} /><DetailLine label="Freight cost" value={detail.freight ? formatCurrency(detail.freight.freightCost) : 'Not added'} />{detail.vendors.map((vendor) => <div className="vendor-payment" key={vendor.id}><strong>{vendor.name}</strong><DetailLine label="Vendor cost" value={vendor.cost ? formatCurrency(vendor.cost.totalCost) : 'Not added'} /><DetailLine label="Payment terms" value={vendor.cost ? humanize(vendor.cost.paymentTerms) : '—'} /><DetailLine label="Due date" value={vendor.cost ? formatDate(vendor.cost.paymentDueDate) : '—'} /><DetailLine label="Payment status" value={vendor.cost?.isPaid ? `Paid ${formatDate(vendor.cost.paidAt)}` : 'Unpaid'} /></div>)}</article>
-      <article className="documentation-content-card compact"><h2>Activity</h2><div className="documentation-activity">{detail.activity.slice(0, 30).map((activity) => <div key={activity.id}><i /><p><strong>{humanize(activity.action)}</strong><span>{activity.actor}</span><small>{formatDateTime(activity.createdAt)}</small></p></div>)}</div></article>
+      <article className="documentation-content-card compact"><h2>Activity</h2><div className="documentation-activity">{detail.activity.slice(0, 30).map((activity) => <div key={activity.id}><i /><p><strong>{humanize(activity.action)}</strong><span>{activity.actor === 'Overseas documentation link' ? detail.overseasRep : activity.actor}</span><small>{formatDateTime(activity.createdAt)}</small></p></div>)}</div></article>
     </section>
 
     {editing && <EditDocumentation detail={detail} close={() => setEditing(false)} saved={(updated) => { setDetail(updated); setEditing(false); setMessage('Container documentation updated.') }} />}
@@ -167,25 +167,29 @@ function DocumentationSubmission({ detail, token, updated }: { detail: Container
 function TokenFileUpload({ token, vendorId, updated }: { token: string; vendorId: string; updated: (detail: ContainerDocumentationDetail) => void }) {
   const [kind, setKind] = useState<'document' | 'departure-photo'>('document')
   const [documentType, setDocumentType] = useState('COMMERCIAL_INVOICE')
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
 
   async function upload() {
-    if (!file) return
+    if (!files.length) return
     setUploading(true)
     setError('')
     try {
-      const formData = new FormData()
-      formData.set('file', file)
-      formData.set('vendorId', vendorId)
-      formData.set('kind', kind)
-      if (kind === 'document') formData.set('documentType', documentType)
-      const response = await fetch(`/api/documentation/token/${encodeURIComponent(token)}/uploads`, { method: 'POST', body: formData })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error || 'Unable to upload this file.')
-      updated(data.detail)
-      setFile(null)
+      let latestDetail: ContainerDocumentationDetail | null = null
+      for (const file of files) {
+        const formData = new FormData()
+        formData.set('file', file)
+        formData.set('vendorId', vendorId)
+        formData.set('kind', kind)
+        if (kind === 'document') formData.set('documentType', documentType)
+        const response = await fetch(`/api/documentation/token/${encodeURIComponent(token)}/uploads`, { method: 'POST', body: formData })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.error || `Unable to upload ${file.name}.`)
+        latestDetail = data.detail
+      }
+      if (latestDetail) updated(latestDetail)
+      setFiles([])
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Unable to upload this file.')
     } finally {
@@ -194,10 +198,10 @@ function TokenFileUpload({ token, vendorId, updated }: { token: string; vendorId
   }
 
   return <div className="token-file-upload">
-    <select value={kind} onChange={(event) => setKind(event.target.value as 'document' | 'departure-photo')}><option value="document">Document</option><option value="departure-photo">Departure photo</option></select>
+    <select value={kind} onChange={(event) => { setKind(event.target.value as 'document' | 'departure-photo'); setFiles([]) }}><option value="document">Document</option><option value="departure-photo">Departure photos</option></select>
     {kind === 'document' && <select value={documentType} onChange={(event) => setDocumentType(event.target.value)}><option value="COMMERCIAL_INVOICE">Commercial Invoice</option><option value="BILL_OF_LADING">Bill of Lading</option><option value="PACKING_SLIP">Packing Slip</option><option value="ISF_FORM">ISF Form</option><option value="OTHER">Other</option></select>}
-    <label><input type="file" accept={kind === 'document' ? '.pdf,.xlsx,.xls,.jpg,.jpeg,.png,.webp' : 'image/jpeg,image/png,image/webp'} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><span>{file?.name || 'Choose file'}</span></label>
-    <button type="button" disabled={!file || uploading} onClick={() => void upload()}>{uploading ? 'Uploading…' : 'Upload'}</button>
+    <label><input type="file" multiple={kind === 'departure-photo'} accept={kind === 'document' ? '.pdf,.xlsx,.xls,.jpg,.jpeg,.png,.webp' : 'image/jpeg,image/png,image/webp'} onChange={(event) => setFiles(Array.from(event.target.files ?? []))} /><span>{files.length ? kind === 'departure-photo' && files.length > 1 ? `${files.length} photos selected` : files[0].name : kind === 'document' ? 'Choose document' : 'Choose photos'}</span></label>
+    <button type="button" disabled={!files.length || uploading} onClick={() => void upload()}>{uploading ? `Uploading ${files.length}…` : files.length > 1 ? `Upload ${files.length} photos` : 'Upload'}</button>
     {error && <small>{error}</small>}
   </div>
 }
@@ -213,7 +217,12 @@ function TokenWarehouseArrivalPhotos({ detail, token, canUpload, updated }: { de
   const [uploadingType, setUploadingType] = useState('')
   const [removingId, setRemovingId] = useState('')
   const [error, setError] = useState('')
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null)
   const vendorId = detail.vendors[0]?.id ?? ''
+  const galleryPhotos = WAREHOUSE_PHOTO_SLOTS.flatMap((slot) => {
+    const photo = detail.warehousePhotos.find((candidate) => candidate.type === slot.type)
+    return photo ? [{ url: `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=warehouse-photo&token=${encodeURIComponent(token)}`, label: `${slot.label} warehouse arrival` }] : []
+  })
 
   async function upload(photoType: string, file: File) {
     setUploadingType(photoType)
@@ -257,25 +266,197 @@ function TokenWarehouseArrivalPhotos({ detail, token, canUpload, updated }: { de
       const url = photo ? `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=warehouse-photo&token=${encodeURIComponent(token)}` : ''
       return <article className={`warehouse-photo-slot${photo ? ' uploaded' : ''}`} key={slot.type}>
         <h5>{slot.label}</h5>
-        {photo ? <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={`${slot.label} warehouse arrival`} /><span>View photo</span></a> : <div className="empty-photo-slot"><span aria-hidden="true">▣</span><small>Not uploaded</small></div>}
+        {photo ? <button className="warehouse-photo-preview" type="button" onClick={() => setGalleryIndex(galleryPhotos.findIndex((item) => item.url === url))}><img src={url} alt={`${slot.label} warehouse arrival`} /><span>View photo</span></button> : <div className="empty-photo-slot"><span aria-hidden="true">▣</span><small>Not uploaded</small></div>}
         {canUpload && <div className="warehouse-photo-actions"><label className="replace-photo"><input type="file" accept="image/jpeg,image/png,image/webp" disabled={!vendorId || uploadingType !== '' || removingId !== ''} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void upload(slot.type, selected); event.currentTarget.value = '' }} /><span>{uploadingType === slot.type ? 'Uploading…' : photo ? 'Replace' : 'Upload'}</span></label>{photo && <button type="button" disabled={uploadingType !== '' || removingId !== ''} onClick={() => void remove(photo.id)}>{removingId === photo.id ? 'Removing…' : 'Remove'}</button>}</div>}
       </article>
     })}</div>
     {error && <p className="documentation-feedback error">{error}</p>}
+    {galleryIndex !== null && <GalleryLightbox photos={galleryPhotos} index={galleryIndex} close={() => setGalleryIndex(null)} change={setGalleryIndex} />}
   </section>
 }
 
 function Fact({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }
 function DetailLine({ label, value }: { label: string; value: string }) { return <div className="documentation-detail-line"><span>{label}</span><strong>{value}</strong></div> }
 
+function TokenDeparturePhoto({ detail, photo, photos, photoIndex, vendorId, token, canEdit, updated }: { detail: ContainerDocumentationDetail; photo: ContainerDocumentationDetail['vendors'][number]['photos'][number]; photos: ContainerDocumentationDetail['vendors'][number]['photos']; photoIndex: number; vendorId: string; token: string; canEdit: boolean; updated: (detail: ContainerDocumentationDetail) => void }) {
+  const [working, setWorking] = useState('')
+  const [error, setError] = useState('')
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null)
+  const url = `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=photo&token=${encodeURIComponent(token)}`
+  const galleryPhotos = photos.map((item) => ({
+    url: `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(item.id)}?kind=photo&token=${encodeURIComponent(token)}`,
+    label: item.caption || item.fileName,
+  }))
+
+  async function replace(file: File) {
+    setWorking('replace')
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.set('file', file)
+      formData.set('vendorId', vendorId)
+      formData.set('kind', 'departure-photo')
+      formData.set('replacePhotoId', photo.id)
+      const response = await fetch(`/api/documentation/token/${encodeURIComponent(token)}/uploads`, { method: 'POST', body: formData })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to replace this photo.')
+      updated(data.detail)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to replace this photo.')
+    } finally {
+      setWorking('')
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm('Delete this departure photo?')) return
+    setWorking('remove')
+    setError('')
+    try {
+      const response = await fetch(`/api/documentation/token/${encodeURIComponent(token)}/uploads?kind=departure-photo&photoId=${encodeURIComponent(photo.id)}`, { method: 'DELETE' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to delete this photo.')
+      updated(data.detail)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to delete this photo.')
+    } finally {
+      setWorking('')
+    }
+  }
+
+  return <article className="token-departure-photo">
+    <button className="departure-photo-preview" type="button" onClick={() => setGalleryIndex(photoIndex)}><img src={url} alt={photo.caption || photo.fileName} loading="lazy" /><span>{photo.caption || photo.fileName}</span></button>
+    {canEdit && <div><label className="replace-photo"><input type="file" accept="image/jpeg,image/png,image/webp" disabled={working !== ''} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void replace(selected); event.currentTarget.value = '' }} /><span>{working === 'replace' ? 'Replacing…' : 'Replace'}</span></label><button type="button" disabled={working !== ''} onClick={() => void remove()}>{working === 'remove' ? 'Deleting…' : 'Delete'}</button></div>}
+    {error && <small>{error}</small>}
+    {galleryIndex !== null && <GalleryLightbox photos={galleryPhotos} index={galleryIndex} close={() => setGalleryIndex(null)} change={setGalleryIndex} />}
+  </article>
+}
+
 function VendorPackage({ detail, vendor, canUpload, token, updated }: { detail: ContainerDocumentationDetail; vendor: ContainerDocumentationDetail['vendors'][number]; canUpload: boolean; token: string; updated: (detail: ContainerDocumentationDetail) => void }) {
+  const [documentIndex, setDocumentIndex] = useState<number | null>(null)
+  const viewerDocuments = vendor.documents.map((document) => ({
+    id: document.id,
+    url: `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(document.id)}?kind=document&token=${encodeURIComponent(token)}`,
+    fileName: document.fileName,
+    type: humanize(document.type),
+    documentType: document.type,
+    fileSize: document.fileSize,
+  }))
   return <article className="documentation-vendor-package">
     <header><div><h3>{vendor.name}</h3><p>{STATUS_LABELS[vendor.status] ?? humanize(vendor.status)} · ISF {vendor.isfConfirmed ? 'confirmed' : 'not confirmed'}</p></div><span>{vendor.documents.length} documents · {vendor.photos.length} photos</span></header>
     {canUpload && <TokenFileUpload token={token} vendorId={vendor.id} updated={updated} />}
-    <div className="documentation-document-grid">{vendor.documents.map((document) => { const url = `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(document.id)}?kind=document&token=${encodeURIComponent(token)}`; return <a href={url} target="_blank" rel="noreferrer" key={document.id}><i>{document.fileName.toLowerCase().endsWith('.pdf') ? 'PDF' : 'FILE'}</i><span><strong>{document.fileName}</strong><small>{humanize(document.type)} · {formatSize(document.fileSize)}</small></span></a> })}</div>
-    {vendor.photos.length > 0 && <><h4>Departure photos</h4><div className="documentation-photo-grid">{vendor.photos.map((photo) => { const url = `/api/documentation/${encodeURIComponent(detail.id)}/files/${encodeURIComponent(photo.id)}?kind=photo&token=${encodeURIComponent(token)}`; return <a href={url} target="_blank" rel="noreferrer" key={photo.id}><img src={url} alt={photo.caption || photo.fileName} loading="lazy" /><span>{photo.caption || photo.fileName}</span></a> })}</div></>}
+    <div className="documentation-document-grid">{vendor.documents.map((document, index) => <button type="button" onClick={() => setDocumentIndex(index)} key={document.id}><i>{document.fileName.toLowerCase().endsWith('.pdf') ? 'PDF' : 'FILE'}</i><span><strong>{document.fileName}</strong><small>{humanize(document.type)} · {formatSize(document.fileSize)}</small></span></button>)}</div>
+    {vendor.photos.length > 0 && <><h4>Departure photos</h4><div className="documentation-photo-grid">{vendor.photos.map((photo, photoIndex) => <TokenDeparturePhoto detail={detail} photo={photo} photos={vendor.photos} photoIndex={photoIndex} vendorId={vendor.id} token={token} canEdit={canUpload} updated={updated} key={photo.id} />)}</div></>}
     {vendor.reviewNotes && <div className="review-notes"><strong>Review notes</strong><p>{vendor.reviewNotes}</p></div>}
+    {documentIndex !== null && <DocumentLightbox documents={viewerDocuments} index={documentIndex} vendorId={vendor.id} token={token} canEdit={canUpload} updated={updated} close={() => setDocumentIndex(null)} change={setDocumentIndex} />}
   </article>
+}
+
+function GalleryLightbox({ photos, index, close, change }: { photos: { url: string; label: string }[]; index: number; close: () => void; change: (index: number) => void }) {
+  const previousIndex = (index - 1 + photos.length) % photos.length
+  const nextIndex = (index + 1) % photos.length
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close()
+      if (event.key === 'ArrowLeft' && photos.length > 1) change(previousIndex)
+      if (event.key === 'ArrowRight' && photos.length > 1) change(nextIndex)
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = ''
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [change, close, nextIndex, photos.length, previousIndex])
+
+  const photo = photos[index]
+  if (!photo) return null
+  return <div className="photo-lightbox" role="dialog" aria-modal="true" aria-label="Photo gallery" onClick={close}>
+    <button className="photo-lightbox-close" type="button" onClick={close} aria-label="Close gallery">×</button>
+    {photos.length > 1 && <button className="photo-lightbox-previous" type="button" onClick={(event) => { event.stopPropagation(); change(previousIndex) }} aria-label="Previous photo">‹</button>}
+    <figure onClick={(event) => event.stopPropagation()}><img src={photo.url} alt={photo.label} /><figcaption><span>{photo.label}</span><strong>{index + 1} / {photos.length}</strong></figcaption></figure>
+    {photos.length > 1 && <button className="photo-lightbox-next" type="button" onClick={(event) => { event.stopPropagation(); change(nextIndex) }} aria-label="Next photo">›</button>}
+  </div>
+}
+
+function DocumentLightbox({ documents, index, vendorId, token, canEdit, updated, close, change }: { documents: { id: string; url: string; fileName: string; type: string; documentType: string; fileSize: number }[]; index: number; vendorId: string; token: string; canEdit: boolean; updated: (detail: ContainerDocumentationDetail) => void; close: () => void; change: (index: number) => void }) {
+  const previousIndex = (index - 1 + documents.length) % documents.length
+  const nextIndex = (index + 1) % documents.length
+  const currentDocument = documents[index]
+  const [working, setWorking] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close()
+      if (event.key === 'ArrowLeft' && documents.length > 1) change(previousIndex)
+      if (event.key === 'ArrowRight' && documents.length > 1) change(nextIndex)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = ''
+    }
+  }, [change, close, documents.length, nextIndex, previousIndex])
+
+  if (!currentDocument) return null
+  const extension = currentDocument.fileName.split('.').pop()?.toLowerCase() ?? ''
+  const isPdf = extension === 'pdf'
+  const isImage = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(extension)
+
+  async function replace(file: File) {
+    setWorking('replace')
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.set('file', file)
+      formData.set('vendorId', vendorId)
+      formData.set('kind', 'document')
+      formData.set('documentType', currentDocument.documentType)
+      formData.set('replaceDocumentId', currentDocument.id)
+      const response = await fetch(`/api/documentation/token/${encodeURIComponent(token)}/uploads`, { method: 'POST', body: formData })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to replace this document.')
+      updated(data.detail)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to replace this document.')
+    } finally {
+      setWorking('')
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`Delete ${currentDocument.fileName}?`)) return
+    setWorking('remove')
+    setError('')
+    try {
+      const response = await fetch(`/api/documentation/token/${encodeURIComponent(token)}/uploads?kind=document&documentId=${encodeURIComponent(currentDocument.id)}`, { method: 'DELETE' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to delete this document.')
+      close()
+      updated(data.detail)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to delete this document.')
+    } finally {
+      setWorking('')
+    }
+  }
+
+  return <div className="document-lightbox" role="dialog" aria-modal="true" aria-label="Document viewer" onClick={close}>
+    <button className="document-lightbox-close" type="button" onClick={close} aria-label="Close document viewer">×</button>
+    {documents.length > 1 && <button className="document-lightbox-previous" type="button" onClick={(event) => { event.stopPropagation(); change(previousIndex) }} aria-label="Previous document">‹</button>}
+    <section onClick={(event) => event.stopPropagation()}>
+      <header><div><strong>{currentDocument.fileName}</strong><span>{currentDocument.type} · {formatSize(currentDocument.fileSize)}</span>{error && <small className="document-viewer-error">{error}</small>}</div><div><b>{index + 1} / {documents.length}</b>{canEdit && <label className="document-replace"><input type="file" accept=".pdf,.xlsx,.xls,.jpg,.jpeg,.png,.webp" disabled={working !== ''} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void replace(selected); event.currentTarget.value = '' }} /><span>{working === 'replace' ? 'Replacing…' : 'Replace'}</span></label>}{canEdit && <button className="document-delete" type="button" disabled={working !== ''} onClick={() => void remove()}>{working === 'remove' ? 'Deleting…' : 'Delete'}</button>}<a href={currentDocument.url} download>Download</a></div></header>
+      <div className="document-preview-stage">
+        {isPdf && <iframe src={currentDocument.url} title={currentDocument.fileName} />}
+        {isImage && <img src={currentDocument.url} alt={currentDocument.fileName} />}
+        {!isPdf && !isImage && <div className="document-preview-fallback"><i>FILE</i><h3>Preview is not available for this file type</h3><p>{currentDocument.fileName}</p><a href={currentDocument.url} download>Download document</a></div>}
+      </div>
+    </section>
+    {documents.length > 1 && <button className="document-lightbox-next" type="button" onClick={(event) => { event.stopPropagation(); change(nextIndex) }} aria-label="Next document">›</button>}
+  </div>
 }
 
 function EditDocumentation({ detail, close, saved }: { detail: ContainerDocumentationDetail; close: () => void; saved: (detail: ContainerDocumentationDetail) => void }) {
