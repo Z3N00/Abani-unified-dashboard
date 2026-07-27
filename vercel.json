@@ -3,6 +3,22 @@
     {
       "path": "/api/sync/inventory",
       "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/slack/notifications?job=reminders",
+      "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/slack/notifications?job=reminders",
+      "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/slack/notifications?job=summary",
+      "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/slack/notifications?job=summary",
+      "schedule": "0 12 * * *"
     }
   ]
 }

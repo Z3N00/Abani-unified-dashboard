@@ -96,7 +96,7 @@ function downloadCsv(filename: string, headings: string[], rows: unknown[][]) {
   URL.revokeObjectURL(url)
 }
 
-export default function ContainersWorkspace({ capabilities, shipsGoEmbedToken, initialData, initialView = 'active' }: { capabilities: Capabilities; shipsGoEmbedToken: string; initialData: InitialData; initialView?: 'active' | 'archived' | 'documentation' | 'payments' }) {
+export default function ContainersWorkspace({ capabilities, shipsGoEmbedToken, initialData, initialView = 'active', initialContainerNumber, initialDetailTab }: { capabilities: Capabilities; shipsGoEmbedToken: string; initialData: InitialData; initialView?: 'active' | 'archived' | 'documentation' | 'payments'; initialContainerNumber?: string; initialDetailTab?: string }) {
   const [containers, setContainers] = useState<Container[]>(initialData.containers)
   const [archived, setArchived] = useState<Container[]>(initialData.archived)
   const [documentation, setDocumentation] = useState<DocumentationRow[]>(initialData.documentation)
@@ -120,6 +120,7 @@ export default function ContainersWorkspace({ capabilities, shipsGoEmbedToken, i
   const detailRequests = useRef(new Map<string, Promise<Detail>>())
   const detailPrefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [today] = useState(() => Date.now())
+  const autoOpenedContainer = useRef(false)
 
   useEffect(() => {
     if (refreshKey === 0) return
@@ -255,6 +256,19 @@ export default function ContainersWorkspace({ capabilities, shipsGoEmbedToken, i
     }
   }
 
+  useEffect(() => {
+    if (autoOpenedContainer.current || !initialContainerNumber) return
+    const match = [...containers, ...archived].find((container) => container.number.toUpperCase() === initialContainerNumber.toUpperCase())
+    if (!match) return
+    autoOpenedContainer.current = true
+    const timer = window.setTimeout(() => {
+      void openDetail(match.id)
+    }, 0)
+    return () => window.clearTimeout(timer)
+    // This runs once for a Slack deep link; openDetail intentionally owns the loading state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [archived, containers, initialContainerNumber])
+
   function downloadCurrentView() {
     const date = new Date().toISOString().slice(0, 10)
     if (view === 'active' || view === 'archived') {
@@ -292,7 +306,7 @@ export default function ContainersWorkspace({ capabilities, shipsGoEmbedToken, i
     {view === 'documentation' && (tabLoading && !documentationLoaded ? <div className="containers-empty tab-loading-panel">Loading documentation…</div> : <DocumentationWorkspace rows={documentation} canCreate={capabilities.documentationWrite} onRefresh={() => loadDocumentation(true)} />)}
     {view === 'payments' && (tabLoading && !paymentsLoaded ? <div className="containers-empty tab-loading-panel">Loading payments…</div> : <PaymentsWorkspace data={payments} />)}
     {detailLoading && <div className="detail-overlay"><div className="detail-card loading-detail">Loading shipment details...</div></div>}
-    {selected && <DetailModal detail={selected} capabilities={capabilities} shipsGoEmbedToken={shipsGoEmbedToken} close={() => {
+    {selected && <DetailModal detail={selected} capabilities={capabilities} shipsGoEmbedToken={shipsGoEmbedToken} initialTab={initialDetailTab} close={() => {
       detailDataCache.current.delete(selected.id)
       setSelected(null)
     }} />}
@@ -494,10 +508,33 @@ function PaymentsWorkspace({ data }: { data: { costs: PaymentRow[]; freight: Fre
   </section>
 }
 
-function DetailModal({ detail, capabilities, shipsGoEmbedToken, close }: { detail: Detail; capabilities: Capabilities; shipsGoEmbedToken: string; close: () => void }) {
+function DetailModal({ detail, capabilities, shipsGoEmbedToken, initialTab, close }: { detail: Detail; capabilities: Capabilities; shipsGoEmbedToken: string; initialTab?: string; close: () => void }) {
   const tabs = [{ key: 'overview', label: 'Overview', visible: true }, { key: 'items', label: `Items (${detail.items.length})`, visible: capabilities.items }, { key: 'trucking', label: 'Trucking', visible: capabilities.trucking }, { key: 'timeline', label: 'Timeline & map', visible: capabilities.timeline }, { key: 'documentation', label: 'Documentation', visible: capabilities.documentation }]
-  const [tab, setTab] = useState('overview')
-  return <div className="detail-overlay" role="dialog" aria-modal="true"><section className="detail-card"><header className="detail-header"><div><p className="eyebrow">CONTAINER DETAIL</p><h2>{detail.number} <span className="sc-summary">SC: {detail.sellercloudIds.join(', ') || '-'}</span></h2><span className={`container-status ${statusClass(detail.status)}`}>{detail.status}</span></div><div className="detail-actions">{capabilities.slack && <button disabled>Send to Slack</button>}{capabilities.pdf && <button disabled>Export PDF</button>}<button className="modal-close" onClick={close} aria-label="Close container detail">x</button></div></header><nav className="detail-tabs">{tabs.filter((item) => item.visible).map((item) => <button className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)} key={item.key}>{item.label}</button>)}</nav><div className="detail-content">{tab === 'overview' && <Overview detail={detail} canSync={capabilities.sync} />}{tab === 'items' && <ScItems entries={detail.scEntries} />}{tab === 'trucking' && <Rows rows={detail.trucking ? [detail.trucking] : []} empty="No trucking details have been added for this container." />}{tab === 'timeline' && <TimelineAndMap detail={detail} shipsGoEmbedToken={shipsGoEmbedToken} />}{tab === 'documentation' && <Documentation detail={detail} canUpload={capabilities.documentationWrite} canAdminister={capabilities.documentationAdmin} />}</div></section></div>
+  const [tab, setTab] = useState(initialTab === 'documentation' && capabilities.documentation ? 'documentation' : 'overview')
+  const [sendingSlack, setSendingSlack] = useState(false)
+  const [slackFeedback, setSlackFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+
+  async function sendToSlack() {
+    if (!window.confirm(`Send container ${detail.number} to Slack?`)) return
+    setSendingSlack(true)
+    setSlackFeedback(null)
+    try {
+      const response = await authenticatedFetch('/api/slack', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ containerNumber: detail.number }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Unable to send this container to Slack.')
+      setSlackFeedback({ type: 'success', message: data.message })
+    } catch (requestError) {
+      setSlackFeedback({ type: 'error', message: requestError instanceof Error ? requestError.message : 'Unable to send this container to Slack.' })
+    } finally {
+      setSendingSlack(false)
+    }
+  }
+
+  return <div className="detail-overlay" role="dialog" aria-modal="true"><section className="detail-card"><header className="detail-header"><div><p className="eyebrow">CONTAINER DETAIL</p><h2>{detail.number} <span className="sc-summary">SC: {detail.sellercloudIds.join(', ') || '-'}</span></h2><span className={`container-status ${statusClass(detail.status)}`}>{detail.status}</span></div><div className="detail-actions">{capabilities.slack && <button type="button" disabled={sendingSlack} onClick={() => void sendToSlack()}>{sendingSlack ? 'Sending…' : 'Send to Slack'}</button>}{capabilities.pdf && <button disabled>Export PDF</button>}<button className="modal-close" onClick={close} aria-label="Close container detail">x</button></div>{slackFeedback && <p className={`slack-feedback ${slackFeedback.type}`} role="status">{slackFeedback.message}</p>}</header><nav className="detail-tabs">{tabs.filter((item) => item.visible).map((item) => <button className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)} key={item.key}>{item.label}</button>)}</nav><div className="detail-content">{tab === 'overview' && <Overview detail={detail} canSync={capabilities.sync} />}{tab === 'items' && <ScItems entries={detail.scEntries} />}{tab === 'trucking' && <Rows rows={detail.trucking ? [detail.trucking] : []} empty="No trucking details have been added for this container." />}{tab === 'timeline' && <TimelineAndMap detail={detail} shipsGoEmbedToken={shipsGoEmbedToken} />}{tab === 'documentation' && <Documentation detail={detail} canUpload={capabilities.documentationWrite} canAdminister={capabilities.documentationAdmin} />}</div></section></div>
 }
 
 function Overview({ detail, canSync }: { detail: Detail; canSync: boolean }) {
