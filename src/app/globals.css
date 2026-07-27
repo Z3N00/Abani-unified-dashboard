@@ -214,6 +214,14 @@ button { cursor: pointer; }
 .settings-list article { display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 1px solid #dbe2eb; border-radius: 10px; padding: 15px 17px; background: white; }
 .settings-list strong, .settings-list small { display: block; }.settings-list strong { color: var(--ui-text); font-size: 13px; text-transform: capitalize; }.settings-list small { margin-top: 3px; color: var(--ui-muted); font-size: 11px; }
 .settings-list code { max-width: 55%; overflow: hidden; color: var(--ui-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.integration-status-card { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 16px; margin-bottom: 18px; padding: 20px; border: 1px solid #dbe2eb; border-radius: 12px; background: #fff; }
+.integration-status-card h2 { margin: 3px 0 5px; color: var(--ui-text); font-size: 20px; }
+.integration-status-card p { margin: 0; color: var(--ui-muted); }
+.integration-status-card button { min-height: 42px; padding: 0 18px; border: 0; border-radius: 8px; background: var(--ui-primary); color: #fff; font-weight: 700; cursor: pointer; }
+.integration-status-card button:disabled { cursor: not-allowed; opacity: .55; }
+.integration-status-card .integration-feedback { grid-column: 1 / -1; padding: 11px 13px; border-radius: 8px; }
+.integration-status-card .integration-feedback.success { background: #ecfdf5; color: #047857; }
+.integration-status-card .integration-feedback.error { background: #fef2f2; color: #b91c1c; }
 .vendor-document-tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--ui-border); padding: 0 4px; }
 .vendor-document-tabs button { position: relative; display: grid; flex: 0 0 auto; gap: 2px; min-width: 150px; border: 0; padding: 13px 18px 15px; color: var(--ui-muted); background: transparent; font: inherit; text-align: left; }
 .vendor-document-tabs button::after { position: absolute; right: 0; bottom: 0; left: 0; height: 2px; background: transparent; content: ''; }

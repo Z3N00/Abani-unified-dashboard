@@ -18,11 +18,16 @@ export async function sendQueuedEmail(message: { to: string; subject: string; ht
       user: required('SMTP_USER'),
       pass: required('SMTP_PASSWORD'),
     },
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 30_000,
   })
-  await transporter.sendMail({
+  const result = await transporter.sendMail({
     from: process.env.SMTP_FROM?.trim() || required('SMTP_USER'),
     to: message.to,
     subject: message.subject,
     html: message.html,
   })
+  if (!result.accepted.map(String).includes(message.to)) throw new Error(`SMTP did not accept ${message.to}.`)
+  return { messageId: result.messageId, accepted: result.accepted.map(String) }
 }

@@ -512,6 +512,7 @@ function DetailModal({ detail, capabilities, shipsGoEmbedToken, initialTab, clos
   const tabs = [{ key: 'overview', label: 'Overview', visible: true }, { key: 'items', label: `Items (${detail.items.length})`, visible: capabilities.items }, { key: 'trucking', label: 'Trucking', visible: capabilities.trucking }, { key: 'timeline', label: 'Timeline & map', visible: capabilities.timeline }, { key: 'documentation', label: 'Documentation', visible: capabilities.documentation }]
   const [tab, setTab] = useState(initialTab === 'documentation' && capabilities.documentation ? 'documentation' : 'overview')
   const [sendingSlack, setSendingSlack] = useState(false)
+  const [exportingPdf, setExportingPdf] = useState(false)
   const [slackFeedback, setSlackFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   async function sendToSlack() {
@@ -534,7 +535,111 @@ function DetailModal({ detail, capabilities, shipsGoEmbedToken, initialTab, clos
     }
   }
 
-  return <div className="detail-overlay" role="dialog" aria-modal="true"><section className="detail-card"><header className="detail-header"><div><p className="eyebrow">CONTAINER DETAIL</p><h2>{detail.number} <span className="sc-summary">SC: {detail.sellercloudIds.join(', ') || '-'}</span></h2><span className={`container-status ${statusClass(detail.status)}`}>{detail.status}</span></div><div className="detail-actions">{capabilities.slack && <button type="button" disabled={sendingSlack} onClick={() => void sendToSlack()}>{sendingSlack ? 'Sending…' : 'Send to Slack'}</button>}{capabilities.pdf && <button disabled>Export PDF</button>}<button className="modal-close" onClick={close} aria-label="Close container detail">x</button></div>{slackFeedback && <p className={`slack-feedback ${slackFeedback.type}`} role="status">{slackFeedback.message}</p>}</header><nav className="detail-tabs">{tabs.filter((item) => item.visible).map((item) => <button className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)} key={item.key}>{item.label}</button>)}</nav><div className="detail-content">{tab === 'overview' && <Overview detail={detail} canSync={capabilities.sync} />}{tab === 'items' && <ScItems entries={detail.scEntries} />}{tab === 'trucking' && <Rows rows={detail.trucking ? [detail.trucking] : []} empty="No trucking details have been added for this container." />}{tab === 'timeline' && <TimelineAndMap detail={detail} shipsGoEmbedToken={shipsGoEmbedToken} />}{tab === 'documentation' && <Documentation detail={detail} canUpload={capabilities.documentationWrite} canAdminister={capabilities.documentationAdmin} />}</div></section></div>
+  async function exportPdf() {
+    setExportingPdf(true)
+    try {
+      const [{ jsPDF }, autoTableModule] = await Promise.all([import('jspdf'), import('jspdf-autotable')])
+      const autoTable = autoTableModule.default
+      const document = new jsPDF({ unit: 'pt', format: 'letter' })
+      const lastTableY = () => (document as typeof document & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 108
+      const raw = detail.raw
+      const value = (...keys: string[]) => {
+        for (const key of keys) {
+          const candidate = raw[key]
+          if (candidate !== null && candidate !== undefined && candidate !== '') return display(candidate)
+        }
+        return '-'
+      }
+      const reportDate = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date())
+      document.setFillColor(26, 48, 99)
+      document.rect(0, 0, 612, 88, 'F')
+      document.setTextColor(255, 255, 255)
+      document.setFont('helvetica', 'bold')
+      document.setFontSize(21)
+      document.text(`Container ${detail.number}`, 38, 39)
+      document.setFontSize(10)
+      document.setFont('helvetica', 'normal')
+      document.text(`SC IDs: ${detail.sellercloudIds.join(', ') || '-'}   |   Status: ${detail.status}`, 38, 59)
+      document.text(`Generated ${reportDate}`, 38, 75)
+
+      autoTable(document, {
+        startY: 108,
+        head: [['Shipment overview', 'Value', 'Shipment overview', 'Value']],
+        body: [
+          ['Warehouse', detail.warehouse || '-', 'Carrier', detail.carrier || '-'],
+          ['Shipped', formatDate(detail.shippedOn), 'Vessel', detail.vessel || '-'],
+          ['ETA port', formatDate(detail.etaPort), 'Port', detail.port || '-'],
+          ['Quantity', formatNumber(detail.quantity), 'Received', `${formatNumber(detail.receivedQuantity)} (${detail.quantity > 0 ? Math.min(100, Math.round((detail.receivedQuantity / detail.quantity) * 100)) : 0}%)`],
+          ['ShipsGo status', value('shipsgoStatus', 'status'), 'ShipsGo ETA', value('shipsgoEta') === '-' ? '-' : formatDate(value('shipsgoEta'))],
+          ['Putaway deadline', value('putawayDeadline') === '-' ? '-' : formatDate(value('putawayDeadline')), 'Document status', detail.docsStatus ? humanize(detail.docsStatus) : '-'],
+        ],
+        theme: 'grid',
+        headStyles: { fillColor: [49, 112, 235] },
+        styles: { fontSize: 9, cellPadding: 5 },
+      })
+
+      if (capabilities.items && detail.items.length) {
+        autoTable(document, {
+          startY: lastTableY() + 22,
+          head: [['SellerCloud items', 'Size', 'Qty', 'Received']],
+          body: detail.items.map((item) => [
+            display(item.sku ?? item.productID ?? item.productId),
+            display(item.size),
+            formatNumber(Number(item.quantity) || 0),
+            formatNumber(Number(item.receivedQty ?? item.receivedQuantity) || 0),
+          ]),
+          theme: 'striped',
+          headStyles: { fillColor: [26, 48, 99] },
+          styles: { fontSize: 8, cellPadding: 4 },
+        })
+      }
+
+      if (capabilities.trucking && detail.trucking) {
+        autoTable(document, {
+          startY: lastTableY() + 22,
+          head: [['Trucking details', 'Value']],
+          body: Object.entries(detail.trucking)
+            .filter(([, fieldValue]) => fieldValue !== null && fieldValue !== undefined && fieldValue !== '')
+            .map(([key, fieldValue]) => [humanize(key), display(fieldValue)]),
+          theme: 'grid',
+          headStyles: { fillColor: [26, 48, 99] },
+          styles: { fontSize: 8, cellPadding: 4 },
+        })
+      }
+
+      if (capabilities.timeline && detail.milestones.length) {
+        autoTable(document, {
+          startY: lastTableY() + 22,
+          head: [['Timeline', 'Location', 'Date', 'Type']],
+          body: detail.milestones.map((milestone) => [
+            eventName(milestone.milestone),
+            milestone.location || '-',
+            milestone.date ? formatDate(milestone.date) : '-',
+            milestone.isActual ? 'Actual' : 'Estimated',
+          ]),
+          theme: 'striped',
+          headStyles: { fillColor: [26, 48, 99] },
+          styles: { fontSize: 8, cellPadding: 4 },
+        })
+      }
+
+      const pages = document.getNumberOfPages()
+      for (let page = 1; page <= pages; page += 1) {
+        document.setPage(page)
+        document.setFontSize(8)
+        document.setTextColor(100, 116, 139)
+        document.text('Abani Rugs Operations', 38, 770)
+        document.text(`Page ${page} of ${pages}`, 574, 770, { align: 'right' })
+      }
+      document.save(`${detail.number}-container-report.pdf`)
+    } catch (exportError) {
+      setSlackFeedback({ type: 'error', message: exportError instanceof Error ? exportError.message : 'Unable to export this container PDF.' })
+    } finally {
+      setExportingPdf(false)
+    }
+  }
+
+  return <div className="detail-overlay" role="dialog" aria-modal="true"><section className="detail-card"><header className="detail-header"><div><p className="eyebrow">CONTAINER DETAIL</p><h2>{detail.number} <span className="sc-summary">SC: {detail.sellercloudIds.join(', ') || '-'}</span></h2><span className={`container-status ${statusClass(detail.status)}`}>{detail.status}</span></div><div className="detail-actions">{capabilities.slack && <button type="button" disabled={sendingSlack} onClick={() => void sendToSlack()}>{sendingSlack ? 'Sending…' : 'Send to Slack'}</button>}{capabilities.pdf && <button type="button" disabled={exportingPdf} onClick={() => void exportPdf()}>{exportingPdf ? 'Exporting…' : 'Export PDF'}</button>}<button className="modal-close" onClick={close} aria-label="Close container detail">x</button></div>{slackFeedback && <p className={`slack-feedback ${slackFeedback.type}`} role="status">{slackFeedback.message}</p>}</header><nav className="detail-tabs">{tabs.filter((item) => item.visible).map((item) => <button className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)} key={item.key}>{item.label}</button>)}</nav><div className="detail-content">{tab === 'overview' && <Overview detail={detail} canSync={capabilities.sync} />}{tab === 'items' && <ScItems entries={detail.scEntries} />}{tab === 'trucking' && <Rows rows={detail.trucking ? [detail.trucking] : []} empty="No trucking details have been added for this container." />}{tab === 'timeline' && <TimelineAndMap detail={detail} shipsGoEmbedToken={shipsGoEmbedToken} />}{tab === 'documentation' && <Documentation detail={detail} canUpload={capabilities.documentationWrite} canAdminister={capabilities.documentationAdmin} />}</div></section></div>
 }
 
 function Overview({ detail, canSync }: { detail: Detail; canSync: boolean }) {
